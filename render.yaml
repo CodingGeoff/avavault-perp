@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: avavault-perp-dex-api
+    runtime: node
+    plan: free
+    buildCommand: cd task7-perp-dex/matching-engine && npm install && npm run build && cd ../server && npm install
+    startCommand: cd task7-perp-dex/server && npm start
+    envVars:
+      - key: FUJI_RPC_URL
+        value: https://api.avax-test.network/ext/bc/C/rpc
+      - key: VAULT_ADDRESS
+        value: "0x0425352bc3c5293D5629c27525969439Ab9C27b5"
+      - key: VAULT_ABI_VERSION
+        value: v2
+      - key: OPERATOR_PRIVATE_KEY
+        sync: false
