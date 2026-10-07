@@ -3,7 +3,7 @@ services:
     name: avavault-perp-dex-api
     runtime: node
     plan: free
-    buildCommand: cd task7-perp-dex/matching-engine && npm install && npm run build && cd ../server && npm install
+    buildCommand: rm -rf task7-perp-dex/matching-engine/node_modules task7-perp-dex/server/node_modules && cd task7-perp-dex/matching-engine && npm install && npm run build && cd ../server && npm install && npm rebuild better-sqlite3 --build-from-source
     startCommand: cd task7-perp-dex/server && npm start
     envVars:
       - key: NODE_VERSION
