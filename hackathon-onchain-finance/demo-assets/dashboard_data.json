@@ -1,0 +1,26 @@
+{
+  "fetchedAtBlock": 59118453,
+  "network": "Avalanche Fuji C-Chain (43113)",
+  "rwaToken": {
+    "address": "0x1cC1650E2Da5c2357c811B90187D1022b70B70Ad",
+    "name": "Shibuya Tower Rental Rights",
+    "symbol": "SRT-RWA",
+    "decimals": 18,
+    "totalSupply": "1000000.0",
+    "deployerBalance": "999050.0",
+    "vaultBalance": "100.0"
+  },
+  "vault": {
+    "address": "0x9128AE5F8cf51eB35A69C29c55B07A7776603b0B",
+    "collateralValueOfDeployer_inQuote18": "0.099785530454675436",
+    "totalAccountValue_inQuote18": "0.099785530454675436",
+    "supportedCollateralsCount": "1"
+  },
+  "pair": {
+    "address": "0x7590d84174571d89732451bb77BB4C38F7183b85",
+    "reserves": {
+      "reserve0": "250000000000000000000",
+      "reserve1": "500000000000000000"
+    }
+  }
+}

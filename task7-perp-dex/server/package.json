@@ -1,0 +1,17 @@
+{
+  "name": "mini-dex-server",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js",
+    "marketmaker": "node src/marketMaker.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.5.0",
+    "cors": "^2.8.5",
+    "ethers": "^6.13.4",
+    "express": "^4.21.1",
+    "ws": "^8.18.0"
+  }
+}

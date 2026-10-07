@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>Mini Perp-Dex Demo — Task7</title>
+<script src="./vendor/ethers.umd.min.js"></script>
+<style>
+  :root{--red:#E84142;--bg:#0b0d10;--card:#15181c;--text:#eee;--muted:#9aa4af;--green:#2ecc71;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);}
+  header{padding:20px;border-bottom:1px solid #23272c;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
+  header h1{font-size:18px;margin:0;}
+  header h1 span{color:var(--red);}
+  main{max-width:960px;margin:0 auto;padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .card{background:var(--card);border:1px solid #23272c;border-radius:14px;padding:18px;}
+  .full{grid-column:1/-1;}
+  input,select{width:100%;padding:8px;border-radius:8px;border:1px solid #2c3138;background:#0f1114;color:#fff;margin-top:4px;}
+  label{font-size:12px;color:var(--muted);display:block;margin-top:10px;}
+  button{background:var(--red);color:#fff;border:none;padding:9px 14px;border-radius:10px;font-weight:600;cursor:pointer;font-size:13px;margin-top:10px;}
+  button.secondary{background:#2c3138;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{padding:5px 8px;text-align:right;border-bottom:1px solid #23272c;}
+  th:first-child,td:first-child{text-align:left;}
+  .bid{color:var(--green);} .ask{color:var(--red);}
+  .log{white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:#0f1114;padding:10px;border-radius:10px;max-height:260px;overflow:auto;}
+  .pill{font-size:11px;padding:2px 8px;border-radius:999px;background:#23272c;}
+  .row{display:flex;justify-content:space-between;padding:4px 0;font-size:13px;}
+</style>
+</head>
+<body>
+<header>
+  <h1>Mini <span>Perp-Dex</span> Demo — Task7</h1>
+  <div>
+    <span id="apiStatus" class="pill">API: 未连接</span>
+    <button id="connectBtn">连接钱包并登录</button>
+  </div>
+</header>
+<main>
+  <div class="card">
+    <h3>账户</h3>
+    <div class="row"><span class="muted">地址</span><span id="account">未连接</span></div>
+    <div class="row"><span class="muted">链上 Vault 保证金余额</span><span id="vaultBalance">-</span></div>
+    <label>API 地址</label>
+    <input id="apiUrl" value="http://localhost:4000" />
+  </div>
+
+  <div class="card">
+    <h3>下单</h3>
+    <label>方向</label>
+    <select id="side"><option value="buy">买 Buy</option><option value="sell">卖 Sell</option></select>
+    <label>价格</label><input id="price" placeholder="例如 2500" />
+    <label>数量</label><input id="quantity" placeholder="例如 5" />
+    <label>TIF</label>
+    <select id="tif"><option value="GTC">GTC</option><option value="IOC">IOC</option><option value="FOK">FOK</option></select>
+    <button id="placeOrderBtn">下单</button>
+  </div>
+
+  <div class="card full">
+    <h3>订单簿（实时，WebSocket 推送）</h3>
+    <table>
+      <thead><tr><th>买盘 Bid</th><th>数量</th><th>|</th><th>卖盘 Ask</th><th>数量</th></tr></thead>
+      <tbody id="bookBody"></tbody>
+    </table>
+  </div>
+
+  <div class="card full">
+    <h3>日志 / 成交回报</h3>
+    <div class="log" id="log">等待连接...</div>
+  </div>
+</main>
+
+<script>
+const { ethers } = window;
+let signer, account, apiUrl;
+let ws;
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.textContent = `[${new Date().toLocaleTimeString()}] ${msg}\n` + el.textContent;
+}
+
+document.getElementById('connectBtn').onclick = async () => {
+  try {
+    apiUrl = document.getElementById('apiUrl').value.trim();
+    if (!window.ethereum) { alert('请安装 MetaMask/Core'); return; }
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    await provider.send('eth_requestAccounts', []);
+    signer = await provider.getSigner();
+    account = await signer.getAddress();
+    document.getElementById('account').textContent = account;
+
+    const message = `Mini-Dex login for ${account} at ${Date.now()}`;
+    const signature = await signer.signMessage(message);
+
+    const res = await fetch(`${apiUrl}/auth/login`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ address: account, message, signature }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    document.getElementById('apiStatus').textContent = 'API: 已登录';
+    log('登录成功: ' + account);
+
+    await refreshBalance();
+    connectWs();
+  } catch (e) { log('连接失败: ' + e.message); }
+};
+
+async function refreshBalance() {
+  try {
+    const res = await fetch(`${apiUrl}/balance/${account}`);
+    const data = await res.json();
+    document.getElementById('vaultBalance').textContent = data.onchain
+      ? ethers.formatUnits(data.balance, 6) + ' mUSDC'
+      : '(未开启链上结算演示)';
+  } catch (e) { log('查询余额失败: ' + e.message); }
+}
+
+function connectWs() {
+  const wsUrl = apiUrl.replace('http', 'ws') + `/ws?address=${account}`;
+  ws = new WebSocket(wsUrl);
+  ws.onmessage = (ev) => {
+    const { type, payload } = JSON.parse(ev.data);
+    if (type === 'snapshot' || type === 'orderbook') renderBook(payload);
+    if (type === 'trades') log('成交: ' + JSON.stringify(payload));
+    if (type === 'order_update') log('我的订单更新: ' + JSON.stringify(payload));
+    if (type === 'settled') log('链上结算完成，tx: ' + payload.txHash);
+  };
+}
+
+function renderBook(snap) {
+  const rows = Math.max(snap.bids.length, snap.asks.length, 1);
+  let html = '';
+  for (let i = 0; i < rows; i++) {
+    const b = snap.bids[i], a = snap.asks[i];
+    html += `<tr>
+      <td class="bid">${b ? b.price : ''}</td><td>${b ? b.quantity : ''}</td>
+      <td>|</td>
+      <td class="ask">${a ? a.price : ''}</td><td>${a ? a.quantity : ''}</td>
+    </tr>`;
+  }
+  document.getElementById('bookBody').innerHTML = html;
+}
+
+document.getElementById('placeOrderBtn').onclick = async () => {
+  try {
+    const body = {
+      traderId: account,
+      side: document.getElementById('side').value,
+      price: document.getElementById('price').value,
+      quantity: document.getElementById('quantity').value,
+      tif: document.getElementById('tif').value,
+      type: 'limit',
+    };
+    const res = await fetch(`${apiUrl}/orders`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    log('下单结果: ' + JSON.stringify(data));
+    await refreshBalance();
+  } catch (e) { log('下单失败: ' + e.message); }
+};
+</script>
+</body>
+</html>

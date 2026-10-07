@@ -1,0 +1,13 @@
+node_modules/
+dist/
+out/
+cache/
+broadcast/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+.env
+.env.local
+lib/forge-std/
+lib/openzeppelin-contracts/

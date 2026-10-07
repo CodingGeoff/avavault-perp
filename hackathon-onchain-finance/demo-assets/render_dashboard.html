@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>AvaVault Perp — 链上实时仪表盘</title>
+<style>
+  :root{--red:#E84142;--bg:#0b0d10;--card:#15181c;--text:#eee;--muted:#9aa4af;--green:#2ecc71;}
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,"PingFang SC",Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);}
+  header{padding:28px 36px;border-bottom:1px solid #23272c;display:flex;justify-content:space-between;align-items:center;}
+  header h1{font-size:24px;margin:0;}
+  header h1 span{color:var(--red);}
+  .sub{color:var(--muted);font-size:13px;margin-top:6px;}
+  main{max-width:1100px;margin:0 auto;padding:28px 36px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;}
+  .card{background:var(--card);border:1px solid #23272c;border-radius:16px;padding:22px;}
+  .card.full{grid-column:1/-1;}
+  .card h3{margin:0 0 14px 0;font-size:14px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em;}
+  .big{font-size:30px;font-weight:700;margin-bottom:4px;}
+  .label{font-size:12px;color:var(--muted);}
+  .row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #1d2126;font-size:14px;}
+  .row:last-child{border-bottom:none;}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:#c7ccd1;}
+  .tag{display:inline-block;background:#23272c;color:var(--green);font-size:11px;padding:3px 10px;border-radius:999px;margin-left:8px;}
+  .flow{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted);margin-top:10px;flex-wrap:wrap;}
+  .pill{background:#1d2126;border:1px solid #2c3138;padding:6px 12px;border-radius:999px;color:#eee;}
+  .arrow{color:var(--red);}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>AvaVault <span>Perp</span></h1>
+    <div class="sub">RWA 抵押的永续合约保证金系统 · 实时读取 Avalanche Fuji 链上状态<span class="tag">● LIVE ON-CHAIN</span></div>
+  </div>
+  <div class="sub" id="blockInfo">block #—</div>
+</header>
+<main>
+  <div class="card">
+    <h3>RWA Token</h3>
+    <div class="big" id="rwaName">—</div>
+    <div class="label" id="rwaSymbol">—</div>
+    <div class="row"><span>总供应量</span><span id="rwaSupply">—</span></div>
+    <div class="row"><span>金库托管中</span><span id="rwaVaultBal">—</span></div>
+  </div>
+  <div class="card">
+    <h3>MultiCollateralVault 保证金估值</h3>
+    <div class="big" id="collValue">—</div>
+    <div class="label">以 WAVAX 计价（18 decimals）</div>
+    <div class="row"><span>账户总保证金价值</span><span id="totalValue">—</span></div>
+    <div class="row"><span>已登记抵押品种类</span><span id="suppCount">—</span></div>
+  </div>
+  <div class="card">
+    <h3>WAVAX / RWA 交易对（LFJ V1）</h3>
+    <div class="big" id="reserveRwa">—</div>
+    <div class="label">RWA 储备量</div>
+    <div class="row"><span>WAVAX 储备量</span><span id="reserveWavax">—</span></div>
+    <div class="row"><span>隐含价格</span><span id="impliedPrice">—</span></div>
+  </div>
+  <div class="card full">
+    <h3>合约地址（点击可在 Snowtrace 验证）</h3>
+    <div class="row"><span>RWAToken</span><span class="mono" id="addrRwa">—</span></div>
+    <div class="row"><span>MultiCollateralVault</span><span class="mono" id="addrVault">—</span></div>
+    <div class="row"><span>WAVAX/RWA Pair</span><span class="mono" id="addrPair">—</span></div>
+    <div class="flow">
+      <span class="pill">用户存入 RWA Token</span><span class="arrow">→</span>
+      <span class="pill">Vault 实时读取 DEX 价格估值</span><span class="arrow">→</span>
+      <span class="pill">打折计入可用保证金</span><span class="arrow">→</span>
+      <span class="pill">开永续合约仓位（Task7 引擎）</span>
+    </div>
+  </div>
+</main>
+<script>
+fetch('./dashboard_data.json').then(r => r.json()).then(d => {
+  document.getElementById('blockInfo').textContent = 'block #' + d.fetchedAtBlock + ' · ' + d.network;
+  document.getElementById('rwaName').textContent = d.rwaToken.name;
+  document.getElementById('rwaSymbol').textContent = d.rwaToken.symbol + ' · ' + d.rwaToken.decimals + ' decimals';
+  document.getElementById('rwaSupply').textContent = Number(d.rwaToken.totalSupply).toLocaleString() + ' ' + d.rwaToken.symbol;
+  document.getElementById('rwaVaultBal').textContent = Number(d.rwaToken.vaultBalance).toLocaleString() + ' ' + d.rwaToken.symbol;
+  document.getElementById('collValue').textContent = Number(d.vault.collateralValueOfDeployer_inQuote18).toFixed(6) + ' WAVAX';
+  document.getElementById('totalValue').textContent = Number(d.vault.totalAccountValue_inQuote18).toFixed(6) + ' WAVAX';
+  document.getElementById('suppCount').textContent = d.vault.supportedCollateralsCount;
+  const r0 = Number(d.pair.reserves.reserve0) / 1e18;
+  const r1 = Number(d.pair.reserves.reserve1) / 1e18;
+  document.getElementById('reserveRwa').textContent = r0.toLocaleString() + ' RWA';
+  document.getElementById('reserveWavax').textContent = r1.toFixed(4) + ' WAVAX';
+  document.getElementById('impliedPrice').textContent = (r0 / r1).toFixed(2) + ' RWA / WAVAX';
+  document.getElementById('addrRwa').textContent = d.rwaToken.address;
+  document.getElementById('addrVault').textContent = d.vault.address;
+  document.getElementById('addrPair').textContent = d.pair.address;
+});
+</script>
+</body>
+</html>
