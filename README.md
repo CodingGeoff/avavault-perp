@@ -45,6 +45,18 @@ Full disclosure and a component-by-component breakdown is in the submission form
 "Project Continuity & Development" section and mirrored in
 [`hackathon-onchain-finance/README.md`](./hackathon-onchain-finance/README.md).
 
+## Live demo
+
+- **Frontend (static, always on):** https://codinggeoff.github.io/avavault-perp/
+- **API / matching engine / on-chain settlement (free-tier, may cold-start after idle):**
+  deployed via the `render.yaml` blueprint in this repo — see [`DEPLOY.md`](./DEPLOY.md)
+  for the one-time setup steps and the live URL once deployed.
+- **Contracts on Avalanche Fuji testnet (permanent, always verifiable):**
+  [`RWAToken`](https://testnet.snowtrace.io/address/0x1cC1650E2Da5c2357c811B90187D1022b70B70Ad) ·
+  [`MultiCollateralVault`](https://testnet.snowtrace.io/address/0x9128AE5F8cf51eB35A69C29c55B07A7776603b0B) ·
+  [`MultiCollateralVaultV2`](https://testnet.snowtrace.io/address/0xb999cb61A4fb2FE71d1C5FBA7aD506F619dD7884) ·
+  [`VaultV2` (perp matching demo)](https://testnet.snowtrace.io/address/0x0425352bc3c5293D5629c27525969439Ab9C27b5)
+
 ## Running it locally
 
 See the Quick Start / testing sections in each subfolder's own README:
