@@ -54,6 +54,20 @@ deployed `VaultV2` contract on Fuji, so it should "just work."
    triggers a real `settleWithAuthorization` transaction, verifiable on
    [Snowtrace](https://testnet.snowtrace.io/address/0x0425352bc3c5293D5629c27525969439Ab9C27b5).
 
+## Keeping it awake (optional, recommended during judging)
+
+Render's free web services spin down after ~15 minutes of no traffic and take
+~30-50 seconds to cold-start on the next request. To avoid judges hitting that
+delay, set up a free external ping every 5 minutes:
+
+1. Sign up at <https://uptimerobot.com> (free).
+2. New Monitor → HTTP(s) → URL: `https://avavault-perp-dex-api.onrender.com/orderbook`
+3. Check interval: 5 minutes (free tier minimum).
+
+This keeps the service warm without touching the deployment itself. If you want a
+backend that genuinely never sleeps instead of relying on a keep-alive ping, see
+`NORTHFLANK_DEPLOY.md` for a no-sleep free-tier alternative.
+
 ## Notes on the free tier
 
 - Render's free web services spin down after ~15 minutes of no traffic and take
