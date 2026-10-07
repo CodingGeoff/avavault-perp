@@ -6,6 +6,8 @@ services:
     buildCommand: cd task7-perp-dex/matching-engine && npm install && npm run build && cd ../server && npm install
     startCommand: cd task7-perp-dex/server && npm start
     envVars:
+      - key: NODE_VERSION
+        value: 20.18.1
       - key: FUJI_RPC_URL
         value: https://api.avax-test.network/ext/bc/C/rpc
       - key: VAULT_ADDRESS
