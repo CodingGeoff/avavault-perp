@@ -161,7 +161,10 @@ forge script script/Deploy.s.sol:Deploy --rpc-url $FUJI_RPC_URL --broadcast --pr
 ## 路线图（如果继续做下去）
 
 1. **打通到 Task7 的撮合引擎**：让 `MultiCollateralVault` 的 `totalAccountValue()` 直接作为
-   Task7 撮合系统里"可开仓保证金"的来源，允许 RWA Token 直接作为永续合约的抵押品，而不需要
+   Task7 撮合系统里"可开仓保证金"的来源（✅ 服务层已接入：撮合服务实时读取金库的
+   `totalAccountValue()` 并与 Vault 的 mUSDC 余额合成综合保证金视图，开启
+   `MARGIN_ENFORCE` 后限价买单撮合前会校验该额度，见 `task7-perp-dex/server/src/margin.js`
+   与其测试 `test-margin.mjs`；把这笔估值正式绑定为仓位保证金仍待仓位系统完成后继续推进），允许 RWA Token 直接作为永续合约的抵押品，而不需要
    先换成 USDC。
 2. ~~**TWAP / 多源价格**~~：✅ 已在 `MultiCollateralVaultV2.sol` 中完成，见上一节。
 3. **清算引擎**：账户总市值跌破维持保证金率时，允许第三方清算人接管仓位（复用 Task4 研究报告里

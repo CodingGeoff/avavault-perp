@@ -14,5 +14,13 @@ services:
         value: "0x0425352bc3c5293D5629c27525969439Ab9C27b5"
       - key: VAULT_ABI_VERSION
         value: v2
+      # RWA 抵押估值接入：/account/:address/margin 会读这个金库的 totalAccountValue()
+      - key: MULTICOLLATERAL_VAULT_ADDRESS
+        value: "0xb999cb61A4fb2FE71d1C5FBA7aD506F619dD7884"
+      # 默认只展示 RWA 估值、不强制校验（避免没有保证金的访客连单都下不了）；
+      # 设置 MARGIN_QUOTE_USD_PRICE（quote 代币美元价，如 WAVAX 价格）后 RWA 估值
+      # 才计入可用保证金，再把 MARGIN_ENFORCE 改为 "true" 才会拦截保证金不足的买单。
+      - key: MARGIN_ENFORCE
+        value: "false"
       - key: OPERATOR_PRIVATE_KEY
         sync: false

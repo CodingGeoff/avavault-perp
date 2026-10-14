@@ -211,6 +211,26 @@ WebSocket 私有频道会推送 `settled` 事件和交易哈希。
 用户撤销、伪造签名、非 operator 调用等场景）。完整设计动机、风险收窄分析见 `SECURITY_REVIEW.md`
 Finding #4。
 
+### 3.4 RWA 抵押估值接入保证金（`MultiCollateralVaultV2.totalAccountValue()` → 撮合服务）
+
+撮合服务（`server/src/margin.js`）会实时读取黑客松金库 `MultiCollateralVaultV2`
+（Fuji `0xb999cb61A4fb2FE71d1C5FBA7aD506F619dD7884`）的 `totalAccountValue()`，把用户存入的
+RWA 抵押品经 TWAP 折价后的估值，与本系统 Vault 的 mUSDC 余额合成一个综合保证金视图：
+
+- `GET /account/:address/margin` 返回两个来源的明细与 `effectiveMargin`；前端账户卡
+  同步展示 RWA 抵押估值与综合可用保证金。
+- 估值原以 quote 代币（当前部署为 WAVAX，18 位）计价，折算成 mUSDC（6 位）需要
+  部署方显式配置 `MARGIN_QUOTE_USD_PRICE`（quote 的美元参考价）；未配置时估值只
+  展示、不计入可用保证金，代码不内置写死汇率。
+- 设置 `MARGIN_ENFORCE=true` 后，限价买单在撮合前先校验综合保证金（结算时买方
+  是付款方），不足返回 403，避免撮合出必然链上结算失败的成交；默认关闭，
+  部署配置见仓库根目录 `render.yaml`。
+
+验证：`server/test-margin.mjs`（16 项，含本地 JSON-RPC 桩端到端：Vault 余额为 0、
+仅靠 RWA 估值的买单通过校验，无保证金买单被拦截）；原有 `test-e2e.mjs`、
+`test-robustness.mjs` 与撮合引擎 21 个用例回归不受影响。边界：这是服务层的
+购买力校验，仓位系统（杠杆/强平）仍未实现，估值尚未在合约层绑定为仓位保证金。
+
 ## 四、学习资源
 
 - Foundry Book（测试、fork、fuzzing）：https://book.getfoundry.sh/

@@ -56,6 +56,8 @@
     <h3>账户</h3>
     <div class="row"><span class="muted">地址</span><span id="account" class="addr">未连接</span></div>
     <div class="row"><span class="muted">链上 Vault 保证金余额</span><span id="vaultBalance">-</span></div>
+    <div class="row"><span class="muted">RWA 抵押估值（MultiCollateralVault）</span><span id="rwaValue">-</span></div>
+    <div class="row"><span class="muted">综合可用保证金</span><span id="effectiveMargin">-</span></div>
     <label>API 地址</label>
     <input id="apiUrl" value="https://avavault-perp-dex-api.onrender.com" />
     <button id="depositBtn" class="secondary" disabled>领取 1,000 mUSDC 并存入保证金</button>
@@ -251,6 +253,25 @@ async function refreshBalance() {
       ? ethers.formatUnits(data.balance, 6) + ' mUSDC'
       : '(未开启链上结算演示)';
   } catch (e) { log('查询余额失败: ' + e.message); }
+  try {
+    const res = await fetch(`${apiUrl}/account/${account}/margin`);
+    if (!res.ok) return;
+    const m = await res.json();
+    const rwaEl = document.getElementById('rwaValue');
+    const effEl = document.getElementById('effectiveMargin');
+    if (!m.rwaConfigured) {
+      rwaEl.textContent = '(未配置 RWA 金库)';
+      effEl.textContent = ethers.formatUnits(m.effectiveMargin, 6) + ' mUSDC';
+    } else if (m.rwaCounted) {
+      rwaEl.textContent = ethers.formatUnits(m.rwaMarginValue, 6) + ' mUSDC（已计入）';
+      effEl.textContent = ethers.formatUnits(m.effectiveMargin, 6) + ' mUSDC';
+    } else {
+      // 服务端未配置 quote 换算率时，只展示链上读到的原始估值（quote 计价、18 位小数），不假装已计入
+      rwaEl.textContent = ethers.formatUnits(m.rwaAccountValueQuote, 18) + '（quote 计价，未计入）';
+      effEl.textContent = ethers.formatUnits(m.effectiveMargin, 6) + ' mUSDC';
+    }
+    if (m.sourceErrors && m.sourceErrors.length) log('保证金数据部分不可用: ' + m.sourceErrors.join('; '));
+  } catch {}
 }
 
 document.getElementById('depositBtn').onclick = async () => {

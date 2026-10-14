@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { ethers } from "ethers";
 import { OrderBook } from "../../matching-engine/dist/orderbook.js";
 import { persistOrderResult, persistOrderState, markTradeSettled, loadRecentTrades, loadOpenOrders } from "./db.js";
+import { MarginService, parsePriceToE6 } from "./margin.js";
 
 const PORT = process.env.PORT || 4000;
 const RPC_URL = process.env.FUJI_RPC_URL || "https://api.avax-test.network/ext/bc/C/rpc";
@@ -52,6 +53,59 @@ if (VAULT_ADDRESS && OPERATOR_PRIVATE_KEY) {
 
 /** 下单时买方提交的 EIP-712 签名授权，key 是这笔订单的 id，只在 v2 结算模式下使用。 */
 const orderAuthorizations = new Map();
+
+// ---------------------------------------------------------------
+// 保证金聚合：把 MultiCollateralVaultV2.totalAccountValue()（RWA 抵押估值）
+// 接进撮合服务。默认只读展示（/account/:address/margin），设置
+// MARGIN_ENFORCE=true 后，买单在撮合前要先过保证金校验：可用保证金 =
+// Vault 的 mUSDC 余额 + RWA 抵押估值（配置了 MARGIN_QUOTE_USD_PRICE 换算率时）。
+// 部署默认指向已部署的 MultiCollateralVaultV2，传空字符串可关闭这个来源。
+// ---------------------------------------------------------------
+const MULTICOLLATERAL_VAULT_ADDRESS =
+  process.env.MULTICOLLATERAL_VAULT_ADDRESS === undefined
+    ? "0xb999cb61A4fb2FE71d1C5FBA7aD506F619dD7884"
+    : process.env.MULTICOLLATERAL_VAULT_ADDRESS;
+const MARGIN_ENFORCE = /^(1|true|yes)$/i.test(process.env.MARGIN_ENFORCE || "");
+const MARGIN_RPC_TIMEOUT_MS = Number(process.env.MARGIN_RPC_TIMEOUT_MS || 8000);
+const MULTICOLLATERAL_ABI = ["function totalAccountValue(address) view returns (uint256)"];
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+  ]);
+}
+
+let marginService = new MarginService({});
+{
+  // 只读 provider 与结算用的 operator 钱包相互独立：没有 operator 私钥时也能查保证金
+  const readProvider = provider || new ethers.JsonRpcProvider(RPC_URL);
+  const readVaultBalance = VAULT_ADDRESS
+    ? async (address) => {
+        const c = vaultContract || new ethers.Contract(VAULT_ADDRESS, VAULT_ABI_V2, readProvider);
+        return withTimeout(c.balanceOf(address), MARGIN_RPC_TIMEOUT_MS, "vault balanceOf");
+      }
+    : null;
+  const readRwaAccountValue = MULTICOLLATERAL_VAULT_ADDRESS
+    ? async (address) => {
+        const c = new ethers.Contract(MULTICOLLATERAL_VAULT_ADDRESS, MULTICOLLATERAL_ABI, readProvider);
+        return withTimeout(c.totalAccountValue(address), MARGIN_RPC_TIMEOUT_MS, "totalAccountValue");
+      }
+    : null;
+  let quotePriceE6 = null;
+  if (process.env.MARGIN_QUOTE_USD_PRICE) {
+    try {
+      quotePriceE6 = parsePriceToE6(process.env.MARGIN_QUOTE_USD_PRICE);
+    } catch (e) {
+      console.error(`[margin] ignoring invalid MARGIN_QUOTE_USD_PRICE: ${e.message}`);
+    }
+  }
+  marginService = new MarginService({ readVaultBalance, readRwaAccountValue, quotePriceE6 });
+  console.log(
+    `[margin] RWA collateral source ${MULTICOLLATERAL_VAULT_ADDRESS || "disabled"}` +
+      `, counted in margin: ${marginService.rwaCounted}, enforcement: ${MARGIN_ENFORCE ? "ON" : "off"}`
+  );
+}
 
 
 // ---------------------------------------------------------------
@@ -155,7 +209,13 @@ wss.on("connection", (ws, req) => {
 // ---------------------------------------------------------------
 
 app.get("/health", (_req, res) =>
-  res.json({ ok: true, settlementEnabled: !!vaultContract, settlementVersion: VAULT_ABI_VERSION })
+  res.json({
+    ok: true,
+    settlementEnabled: !!vaultContract,
+    settlementVersion: VAULT_ABI_VERSION,
+    marginEnforce: MARGIN_ENFORCE,
+    rwaCollateralCounted: marginService.rwaCounted,
+  })
 );
 
 /** v2 结算模式下，客户端需要用这份 domain 去签署 EIP-712 授权（见 README §三·2）。 */
@@ -217,11 +277,48 @@ app.get("/balance/:address", async (req, res) => {
   }
 });
 
+/** 综合保证金视图：Vault 的 mUSDC 余额 + MultiCollateralVaultV2 的 RWA 抵押估值 */
+app.get("/account/:address/margin", async (req, res) => {
+  if (!ethers.isAddress(req.params.address)) {
+    return res.status(400).json({ error: "invalid address" });
+  }
+  const m = await marginService.getMargin(req.params.address);
+  res.json({
+    address: m.address,
+    vaultBalance: m.vaultBalance.toString(),
+    rwaAccountValueQuote: m.rwaAccountValueQuote.toString(),
+    rwaMarginValue: m.rwaMarginValue === null ? null : m.rwaMarginValue.toString(),
+    effectiveMargin: m.effectiveMargin.toString(),
+    rwaConfigured: m.rwaConfigured,
+    rwaCounted: m.rwaCounted,
+    enforce: MARGIN_ENFORCE,
+    sourceErrors: m.sourceErrors,
+  });
+});
+
 app.post("/orders", async (req, res) => {
   try {
     const { traderId, side, price, quantity, type, tif, authorization } = req.body;
     if (!sessions.has(String(traderId).toLowerCase())) {
       return res.status(401).json({ error: "please /auth/login first" });
+    }
+    // 保证金校验（可选开启）：结算时买方是付款方，所以买单撮合前先确认
+    // "Vault mUSDC 余额 + RWA 抵押估值"覆盖成交所需金额，避免撮合出一笔
+    // 必然链上结算失败（InsufficientBalance）的成交。市价买单没有确定价格，
+    // 无法事先算出所需金额，本原型只对限价买单做这项校验。
+    if (MARGIN_ENFORCE && side === "buy" && (type || "limit") === "limit") {
+      const required = toBigIntSafe(price) * toBigIntSafe(quantity);
+      const check = await marginService.checkSufficient(traderId, required);
+      if (check.sourceErrors.length) {
+        return res.status(503).json({ error: `margin check unavailable: ${check.sourceErrors.join("; ")}` });
+      }
+      if (!check.sufficient) {
+        return res.status(403).json({
+          error:
+            `insufficient margin: required ${required.toString()}, available ${check.effectiveMargin.toString()} ` +
+            `(vault ${check.vaultBalance.toString()} + RWA collateral ${check.rwaMarginValue === null ? "not counted" : check.rwaMarginValue.toString()})`,
+        });
+      }
     }
     // v2 结算模式下，买单必须携带买方自己签署的 EIP-712 授权（对应 VaultV2.settleWithAuthorization），
     // 因为撮合后由买方向卖方转账，operator 只能在这份授权圈定的额度/有效期内代为结算。
@@ -284,6 +381,8 @@ app.post("/orders", async (req, res) => {
             tx = await vaultContract.settle(t.buyTraderId, t.sellTraderId, amount, tradeRef);
           }
           const receipt = await tx.wait();
+          marginService.invalidate(t.buyTraderId);
+          marginService.invalidate(t.sellTraderId);
           markTradeSettled(t.id, receipt.hash);
           pushPrivate(t.buyTraderId, "settled", { tradeId: t.id, txHash: receipt.hash });
           pushPrivate(t.sellTraderId, "settled", { tradeId: t.id, txHash: receipt.hash });
