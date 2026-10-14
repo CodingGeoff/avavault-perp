@@ -237,9 +237,11 @@ RWA 抵押品经 TWAP 折价后的估值，与本系统 Vault 的 mUSDC 余额�
 （`order_update` / `settled`）只对携带有效 token 的连接按地址推送，只靠查询参数
 里的地址无法再订阅他人的订单与结算事件（退化为公开订单簿频道）。会话本身落库
 （SQLite `sessions` 表，7 天过期），进程重启后免重新签名登录。回归覆盖在
-`server/test-robustness.mjs`（17 项）。仓库另有 GitHub Actions：`ci.yml` 在每次
-PR 上跑撮合引擎、服务端三套测试与前端语法检查；`deploy-demo.yml` 在 demo 前端
-变更合并到 main 后自动发布到 `gh-pages`，避免公开演示站与源码再次漂移。
+`server/test-robustness.mjs`（17 项）。另有一套 GitHub Actions 草案（PR 评论中
+给出全文）：`ci.yml` 在每次 PR 上跑撮合引擎、服务端三套测试与前端语法检查；
+`deploy-demo.yml` 在 demo 前端变更合并到 main 后自动发布到 `gh-pages`，避免
+公开演示站与源码再次漂移。因当前推送令牌没有 `workflows` 权限，这两个文件
+需要仓库所有者在 GitHub 网页端添加后才会生效。
 
 ## 四、学习资源
 
