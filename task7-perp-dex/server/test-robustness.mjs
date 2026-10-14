@@ -1,4 +1,5 @@
 import { ethers } from "ethers";
+import WebSocket from "ws";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -62,7 +63,20 @@ async function login(wallet) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ address: wallet.address, message, signature }),
   });
-  if (!res.ok) throw new Error(`login failed: ${await res.text()}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(`login failed: ${JSON.stringify(data)}`);
+  return data;
+}
+
+/** 连接一个 WebSocket 客户端并收集接下来一段时间内的消息 */
+function collectWs(url, durationMs = 700) {
+  return new Promise((resolve, reject) => {
+    const messages = [];
+    const ws = new WebSocket(url);
+    ws.on("message", (d) => messages.push(JSON.parse(d.toString())));
+    ws.on("error", reject);
+    ws.on("open", () => setTimeout(() => { ws.close(); resolve(messages); }, durationMs));
+  });
 }
 
 async function placeOrder(wallet, side, price, quantity, extra = {}) {
@@ -95,8 +109,27 @@ async function main() {
   let server = startServer();
   try {
     await waitForHealth();
-    await login(alice);
+    const aliceLogin = await login(alice);
+    check("login returns a session token", typeof aliceLogin.sessionToken === "string" && aliceLogin.sessionToken.length >= 32);
     await login(bob);
+
+    console.log("\n=== 1b. WebSocket private channel requires the session token ===");
+    const spyPromise = collectWs(`${API.replace("http", "ws")}/ws?address=${alice.address}`, 900);
+    await new Promise((r) => setTimeout(r, 200));
+    await placeOrder(alice, "sell", "2700", "1");
+    const spyMessages = await spyPromise;
+    check(
+      "address-only subscriber gets public book but NO private order_update",
+      spyMessages.some((m) => m.type === "orderbook") && !spyMessages.some((m) => m.type === "order_update")
+    );
+    const ownPromise = collectWs(`${API.replace("http", "ws")}/ws?token=${aliceLogin.sessionToken}`, 900);
+    await new Promise((r) => setTimeout(r, 200));
+    await placeOrder(alice, "sell", "2701", "1");
+    const ownMessages = await ownPromise;
+    check(
+      "token subscriber receives own order_update",
+      ownMessages.some((m) => m.type === "order_update" && m.payload.traderId === alice.address)
+    );
 
     console.log("\n=== 1. core matching still works ===");
     const sell = await placeOrder(alice, "sell", "2500", "10");
@@ -142,11 +175,14 @@ async function main() {
     );
     const book = await (await fetch(`${API}/orderbook`)).json();
     check(
-      "orderbook after restart shows only the restored bid",
-      book.bids.length === 1 && book.bids[0].price === "2400" && book.asks.length === 0
+      "orderbook after restart shows the restored bid (cancelled ask stays gone)",
+      book.bids.length === 1 && book.bids[0].price === "2400" &&
+        book.asks.every((a) => a.price !== "2600") && book.asks.length === 2
     );
 
     console.log("\n=== 5. self-trade prevention still holds ===");
+    const afterRestartOrder = await placeOrder(alice, "sell", "2800", "1");
+    check("login session survives restart (order without re-login)", afterRestartOrder.status === 200);
     await login(alice);
     // alice 的买单挂在最优价位，自己的卖单在该价位只能碰到自己的单（更低价位的
     // 他人买单与 2500 的卖价不交叉），用来隔离验证自成交保护。

@@ -37,7 +37,28 @@ CREATE TABLE IF NOT EXISTS trades (
   timestamp INTEGER NOT NULL,
   settledTxHash TEXT
 );
+
+CREATE TABLE IF NOT EXISTS sessions (
+  address TEXT PRIMARY KEY,
+  token TEXT NOT NULL,
+  createdAt INTEGER NOT NULL
+);
 `);
+
+/** 登录会话落库：进程重启（免费层休眠唤醒/重新部署）后用户不用重新签名登录 */
+export function persistSession(address, token) {
+  db.prepare(
+    `INSERT INTO sessions (address, token, createdAt) VALUES (?, ?, ?)
+     ON CONFLICT(address) DO UPDATE SET token=excluded.token, createdAt=excluded.createdAt`
+  ).run(String(address).toLowerCase(), token, Date.now());
+}
+
+/** 载入未过期的会话（默认 7 天），过期的顺手清掉 */
+export function loadSessions(maxAgeMs = 7 * 24 * 3600 * 1000) {
+  const cutoff = Date.now() - maxAgeMs;
+  db.prepare(`DELETE FROM sessions WHERE createdAt < ?`).run(cutoff);
+  return db.prepare(`SELECT * FROM sessions WHERE createdAt >= ?`).all(cutoff);
+}
 
 // 迁移：老库的 orders 表没有 authorization 列。v2 结算模式下买单携带的 EIP-712
 // 授权以前只存在服务端内存里，进程一重启（如免费层休眠唤醒/重新部署）就丢失，

@@ -231,6 +231,16 @@ RWA 抵押品经 TWAP 折价后的估值，与本系统 Vault 的 mUSDC 余额�
 `test-robustness.mjs` 与撮合引擎 21 个用例回归不受影响。边界：这是服务层的
 购买力校验，仓位系统（杠杆/强平）仍未实现，估值尚未在合约层绑定为仓位保证金。
 
+### 3.5 会话与私有推送加固
+
+登录（`POST /auth/login`）现在返回随机 `sessionToken`：WebSocket 私有频道
+（`order_update` / `settled`）只对携带有效 token 的连接按地址推送，只靠查询参数
+里的地址无法再订阅他人的订单与结算事件（退化为公开订单簿频道）。会话本身落库
+（SQLite `sessions` 表，7 天过期），进程重启后免重新签名登录。回归覆盖在
+`server/test-robustness.mjs`（17 项）。仓库另有 GitHub Actions：`ci.yml` 在每次
+PR 上跑撮合引擎、服务端三套测试与前端语法检查；`deploy-demo.yml` 在 demo 前端
+变更合并到 main 后自动发布到 `gh-pages`，避免公开演示站与源码再次漂移。
+
 ## 四、学习资源
 
 - Foundry Book（测试、fork、fuzzing）：https://book.getfoundry.sh/

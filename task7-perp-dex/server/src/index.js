@@ -3,8 +3,9 @@ import cors from "cors";
 import { WebSocketServer } from "ws";
 import { createServer } from "node:http";
 import { ethers } from "ethers";
+import { randomBytes } from "node:crypto";
 import { OrderBook } from "../../matching-engine/dist/orderbook.js";
-import { persistOrderResult, persistOrderState, markTradeSettled, loadRecentTrades, loadOpenOrders } from "./db.js";
+import { persistOrderResult, persistOrderState, markTradeSettled, loadRecentTrades, loadOpenOrders, persistSession, loadSessions } from "./db.js";
 import { MarginService, parsePriceToE6 } from "./margin.js";
 
 const PORT = process.env.PORT || 4000;
@@ -146,8 +147,18 @@ const recentTrades = loadRecentTrades(1);
 if (recentTrades.length) book.fastForwardTradeSeq(recentTrades[0].id);
 console.log(`[startup] restored ${restoredCount} open order(s) from SQLite`);
 
-// 简单会话存储：地址 -> 最近一次签名登录时间
+// 会话存储：地址 -> {token, createdAt}，token 反查地址的索引，以及落库恢复。
+// 以前只存内存：进程一重启所有人都要重新签名登录；且 WebSocket 私有频道只凭
+// 查询参数里的 address 就能订阅别人的订单/结算推送（知道地址即可偷窥）。
+// 现在登录返回随机 sessionToken，私有频道必须凭 token 订阅，会话本身落库，
+// 重启后 7 天内免重新登录。
 const sessions = new Map();
+const sessionAddressByToken = new Map();
+for (const row of loadSessions()) {
+  sessions.set(row.address, { token: row.token, createdAt: row.createdAt });
+  sessionAddressByToken.set(row.token, row.address);
+}
+if (sessions.size) console.log(`[startup] restored ${sessions.size} login session(s) from SQLite`);
 
 function toBigIntSafe(v) {
   return typeof v === "bigint" ? v : BigInt(v);
@@ -198,7 +209,10 @@ function pushPrivate(traderId, type, payload) {
 
 wss.on("connection", (ws, req) => {
   const url = new URL(req.url, "http://localhost");
-  const address = url.searchParams.get("address");
+  // 私有推送只认登录时发放的 sessionToken；只带 address 参数的连接退化为
+  // 公开频道（能看订单簿快照，收不到任何人的 order_update / settled 私有事件）。
+  const token = url.searchParams.get("token");
+  const address = token ? sessionAddressByToken.get(token) || null : null;
   clients.set(ws, address);
   ws.send(JSON.stringify({ type: "snapshot", payload: serializeSnapshot(book.getSnapshot()) }));
   ws.on("close", () => clients.delete(ws));
@@ -244,8 +258,14 @@ app.post("/auth/login", (req, res) => {
     if (!message.includes(address)) {
       return res.status(400).json({ error: "message must include your address to prevent replay" });
     }
-    sessions.set(address.toLowerCase(), Date.now());
-    res.json({ ok: true, address });
+    const key = address.toLowerCase();
+    const previous = sessions.get(key);
+    if (previous) sessionAddressByToken.delete(previous.token);
+    const sessionToken = randomBytes(32).toString("hex");
+    sessions.set(key, { token: sessionToken, createdAt: Date.now() });
+    sessionAddressByToken.set(sessionToken, key);
+    persistSession(key, sessionToken);
+    res.json({ ok: true, address, sessionToken });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
