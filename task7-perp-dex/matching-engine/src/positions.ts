@@ -12,7 +12,11 @@
  *   maintenanceMarginBps。权益 = 已分配保证金 + 未实现盈亏，
  *   权益 < 维持保证金即触发强平（以标记价平仓，多余保证金退回，
  *   权益为负的部分记为穿仓缺口 deficit，等待保险基金/结算层处理）。
- * - 标记价格由调用方注入（最新成交价）；没有标记价时用入场价，未实现盈亏为 0。
+ * - 标记价格由调用方注入（独立预言机给出的价格）；没有标记价时用入场价，未实现盈亏为 0。
+ * - 资金费率按标记价相对指数价的溢价计算（调用方传入指数价）：标记价高于指数价时
+ *   费率为正、多头付空头，反之空头付多头；费率绝对值封顶，结算直接调整各仓位的
+ *   已分配保证金，并累计到 cumulativeFunding 供审计/展示。没有独立指数价时调用方
+ *   不应结算资金费（费率视为 0），避免拿标记价和它自己比出假溢价。
  */
 
 export interface Position {
@@ -23,6 +27,8 @@ export interface Position {
   /** 最近一次开仓使用的杠杆（展示用；实际占用按每次加仓的名义/杠杆逐笔累积） */
   leverage: number;
   realizedPnl: bigint;
+  /** 累计已结算资金费现金流：正数=净收到，负数=净支付 */
+  cumulativeFunding: bigint;
 }
 
 export interface PositionSnapshot extends Position {
@@ -48,6 +54,17 @@ export interface LiquidationRecord {
   badDebt: bigint;
   /** 本次强平罚金（计入保险基金） */
   penalty: bigint;
+}
+
+export interface FundingPayment {
+  traderId: string;
+  sizeSigned: bigint;
+  /** 本期费率（bps，正数表示多头付空头） */
+  rateBps: number;
+  /** 带符号现金流：正数=该仓位收到资金费，负数=支付资金费 */
+  cashflow: bigint;
+  marginAllocated: bigint;
+  cumulativeFunding: bigint;
 }
 
 const BPS_DENOMINATOR = 10_000n;
@@ -104,7 +121,7 @@ export class PositionManager {
   }
 
   private empty(traderId: string): Position {
-    return { traderId, sizeSigned: 0n, entryPrice: 0n, marginAllocated: 0n, leverage: 1, realizedPnl: 0n };
+    return { traderId, sizeSigned: 0n, entryPrice: 0n, marginAllocated: 0n, leverage: 1, realizedPnl: 0n, cumulativeFunding: 0n };
   }
 
   getPosition(traderId: string): Position {
@@ -270,6 +287,63 @@ export class PositionManager {
     return record;
   }
 
+  /** 当前多空未平仓名义价值（按各仓位快照使用的标记价计） */
+  getOpenInterest() {
+    let longNotional = 0n;
+    let shortNotional = 0n;
+    for (const snap of this.allSnapshots()) {
+      const notional = (snap.sizeSigned > 0n ? snap.sizeSigned : -snap.sizeSigned) * snap.markPrice;
+      if (snap.sizeSigned > 0n) longNotional += notional;
+      else shortNotional += notional;
+    }
+    return { longNotional, shortNotional };
+  }
+
+  /**
+   * 由标记价相对指数价的溢价推导资金费率（bps/期）：
+   * premiumBps = (mark - index) / index × 10000，费率 = premiumBps 并封顶到 ±maxAbsBps。
+   * 标记价高于指数价（多头拥挤）时为正：多头付空头；低于时为负。指数价缺失/非正返回 0。
+   */
+  static calculateFundingRateBps(markPrice: bigint, indexPrice: bigint | null, maxAbsBps = 10): number {
+    if (!Number.isInteger(maxAbsBps) || maxAbsBps < 0) {
+      throw new Error("maxAbsBps must be a non-negative integer");
+    }
+    if (indexPrice === null || indexPrice <= 0n || markPrice <= 0n || maxAbsBps === 0) return 0;
+    const premiumBps = Number(((markPrice - indexPrice) * 10_000n) / indexPrice);
+    return Math.max(-maxAbsBps, Math.min(maxAbsBps, premiumBps));
+  }
+
+  /**
+   * 按给定费率结算一期资金费：直接调整每个未平仓位的 marginAllocated，
+   * cashflow 累计进 cumulativeFunding。rate > 0 时多头付、空头收；rate < 0 相反。
+   * 返回逐仓位现金流记录（零仓位不参与）。
+   */
+  applyFunding(rateBps: number): FundingPayment[] {
+    if (!Number.isInteger(rateBps)) throw new Error("funding rateBps must be an integer");
+    const payments: FundingPayment[] = [];
+    if (rateBps === 0) return payments;
+    for (const pos of this.positions.values()) {
+      if (pos.sizeSigned === 0n) continue;
+      const snap = this.snapshot(pos.traderId);
+      const absSize = pos.sizeSigned > 0n ? pos.sizeSigned : -pos.sizeSigned;
+      const amount = (absSize * snap.markPrice * BigInt(Math.abs(rateBps))) / BPS_DENOMINATOR;
+      if (amount === 0n) continue;
+      const isPayer = rateBps > 0 ? pos.sizeSigned > 0n : pos.sizeSigned < 0n;
+      const cashflow = isPayer ? -amount : amount;
+      pos.marginAllocated += cashflow;
+      pos.cumulativeFunding += cashflow;
+      payments.push({
+        traderId: pos.traderId,
+        sizeSigned: pos.sizeSigned,
+        rateBps,
+        cashflow,
+        marginAllocated: pos.marginAllocated,
+        cumulativeFunding: pos.cumulativeFunding,
+      });
+    }
+    return payments;
+  }
+
   /** 全部未平仓位快照 */
   allSnapshots(): PositionSnapshot[] {
     return [...this.positions.keys()]
@@ -286,6 +360,7 @@ export class PositionManager {
       marginAllocated: pos.marginAllocated.toString(),
       leverage: pos.leverage,
       realizedPnl: pos.realizedPnl.toString(),
+      cumulativeFunding: pos.cumulativeFunding.toString(),
     };
   }
 
@@ -297,6 +372,7 @@ export class PositionManager {
       marginAllocated: BigInt(data.marginAllocated),
       leverage: data.leverage,
       realizedPnl: BigInt(data.realizedPnl),
+      cumulativeFunding: BigInt(data.cumulativeFunding ?? "0"),
     });
   }
 }

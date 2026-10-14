@@ -58,8 +58,11 @@
     <div class="row"><span class="muted">链上 Vault 保证金余额</span><span id="vaultBalance">-</span></div>
     <div class="row"><span class="muted">RWA 抵押估值（MultiCollateralVault）</span><span id="rwaValue">-</span></div>
     <div class="row"><span class="muted">综合可用保证金</span><span id="effectiveMargin">-</span></div>
-    <label>API 地址</label>
-    <input id="apiUrl" value="https://avavault-perp-dex-api.onrender.com" />
+    <details style="margin-top:10px;">
+      <summary style="font-size:12px;color:#9aa4af;cursor:pointer;">高级设置（API 地址）</summary>
+      <label>API 地址</label>
+      <input id="apiUrl" value="https://avavault-perp-dex-api.onrender.com" />
+    </details>
     <button id="depositBtn" class="secondary" disabled>领取 1,000 mUSDC 并存入保证金</button>
     <div class="hint">
       存入后成交才能完成链上结算（结算从买方 Vault 余额中扣款）。存入需要支付少量 Fuji 测试网
@@ -71,7 +74,9 @@
     <h3>下单</h3>
     <label>方向</label>
     <select id="side"><option value="buy">买 Buy</option><option value="sell">卖 Sell</option></select>
-    <label>价格</label><input id="price" placeholder="例如 2500" inputmode="numeric" />
+    <label>订单类型</label>
+    <select id="orderType"><option value="limit" selected>限价 Limit</option><option value="market">市价 Market</option></select>
+    <label id="priceLabel">价格</label><input id="price" placeholder="例如 2500" inputmode="numeric" />
     <label>数量</label><input id="quantity" placeholder="例如 5" inputmode="numeric" />
     <label>TIF</label>
     <select id="tif"><option value="GTC">GTC</option><option value="IOC">IOC</option><option value="FOK">FOK</option></select>
@@ -93,6 +98,12 @@
   </div>
 
   <div class="card full">
+    <h3>价格走势（最近成交）</h3>
+    <canvas id="priceChart" width="900" height="180" style="width:100%;height:180px;background:#0f1114;border:1px solid #23272c;border-radius:10px;"></canvas>
+    <div class="hint" id="chartInfo">暂无成交数据</div>
+  </div>
+
+  <div class="card full">
     <h3>我的挂单</h3>
     <table>
       <thead><tr><th>订单</th><th>方向</th><th>价格</th><th>剩余 / 总量</th><th>状态</th><th></th></tr></thead>
@@ -103,10 +114,10 @@
   <div class="card full">
     <h3>我的仓位</h3>
     <table>
-      <thead><tr><th>方向</th><th>数量</th><th>入场价</th><th>标记价</th><th>未实现盈亏</th><th>占用保证金</th><th>强平价</th><th></th></tr></thead>
-      <tbody id="positionBody"><tr><td colspan="8" style="text-align:left;color:#9aa4af;">暂无仓位</td></tr></tbody>
+      <thead><tr><th>方向</th><th>数量</th><th>入场价</th><th>标记价</th><th>未实现盈亏</th><th>占用保证金</th><th>累计资金费</th><th>强平价</th><th></th></tr></thead>
+      <tbody id="positionBody"><tr><td colspan="9" style="text-align:left;color:#9aa4af;">暂无仓位</td></tr></tbody>
     </table>
-    <div class="hint">仓位保证金来自综合保证金（Vault mUSDC 余额 + RWA 抵押估值）；权益跌破维持保证金（5%）将触发强平。<span id="markPriceInfo"></span></div>
+    <div class="hint">仓位保证金来自综合保证金（Vault mUSDC 余额 + RWA 抵押估值）；权益跌破维持保证金（5%）将触发强平。<span id="markPriceInfo"></span><span id="fundingInfo"></span></div>
   </div>
 
   <div class="card full">
@@ -154,6 +165,9 @@ const ERC20_ABI = [
 const VAULT_ABI = ['function deposit(uint256 amount) external'];
 
 let signer, account, apiUrl, ws, settlementDomainCache, sessionToken;
+let latestBestBid = null, latestBestAsk = null;
+const priceHistory = [];
+const seenTradeIds = new Set();
 
 function shortAddr(a) { return a ? a.slice(0, 6) + '…' + a.slice(-4) : ''; }
 
@@ -336,6 +350,7 @@ function connectWs() {
     if (type === 'trades') { renderTrades(payload, true); log('成交: ' + JSON.stringify(payload)); }
     if (type === 'order_update') { log('我的订单更新: ' + JSON.stringify(payload)); refreshMyOrders(); }
     if (type === 'position_update') renderPosition(payload);
+    if (type === 'funding') { log(`资金费结算: ${payload.rateBps} bps`); refreshPosition(); }
     if (type === 'liquidated') { log('⚠️ 仓位已被强平: ' + JSON.stringify(payload)); refreshPosition(); refreshBalance(); }
     if (type === 'settled') { log('链上结算完成，tx: ' + payload.txHash, payload.txHash); refreshBalance(); }
     if (type === 'settlement_failed') {
@@ -350,6 +365,13 @@ function connectWs() {
 }
 
 function renderBook(snap) {
+  latestBestBid = snap.bids.length ? snap.bids[0].price : null;
+  latestBestAsk = snap.asks.length ? snap.asks[0].price : null;
+  if (!snap.bids.length && !snap.asks.length) {
+    document.getElementById('bookBody').innerHTML =
+      '<tr><td colspan="5" style="text-align:left;color:#9aa4af;">暂无挂单 — 可先下一笔限价单，或启动做市脚本提供双边流动性</td></tr>';
+    return;
+  }
   const rows = Math.max(snap.bids.length, snap.asks.length, 1);
   let html = '';
   for (let i = 0; i < rows; i++) {
@@ -363,7 +385,52 @@ function renderBook(snap) {
   document.getElementById('bookBody').innerHTML = html;
 }
 
+function recordTradePrices(trades, prepend = false) {
+  const ordered = prepend ? [...trades].reverse() : [...trades].reverse();
+  for (const t of ordered) {
+    if (!t || seenTradeIds.has(t.id)) continue;
+    seenTradeIds.add(t.id);
+    priceHistory.push({ id: t.id, price: Number(t.price), timestamp: t.timestamp || Date.now() });
+  }
+  priceHistory.sort((a, b) => (a.timestamp - b.timestamp) || String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
+  if (priceHistory.length > 100) priceHistory.splice(0, priceHistory.length - 100);
+  drawPriceChart();
+}
+
+function drawPriceChart() {
+  const canvas = document.getElementById('priceChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  const info = document.getElementById('chartInfo');
+  if (priceHistory.length < 2) {
+    ctx.fillStyle = '#9aa4af'; ctx.font = '14px sans-serif';
+    ctx.fillText(priceHistory.length ? `最新成交价 ${priceHistory[priceHistory.length - 1].price}` : '暂无成交数据', 16, 28);
+    if (info) info.textContent = priceHistory.length ? '只有一笔成交，暂无法画出走势' : '暂无成交数据';
+    return;
+  }
+  const prices = priceHistory.map((p) => p.price);
+  let min = Math.min(...prices), max = Math.max(...prices);
+  if (min === max) { min -= 1; max += 1; }
+  const pad = (max - min) * 0.15; min -= pad; max += pad;
+  const x = (i) => 44 + (i * (w - 64)) / (priceHistory.length - 1);
+  const y = (v) => 14 + ((max - v) * (h - 38)) / (max - min);
+  ctx.strokeStyle = '#23272c'; ctx.fillStyle = '#9aa4af'; ctx.font = '11px sans-serif'; ctx.lineWidth = 1;
+  for (const v of [min + pad, (min + max) / 2, max - pad]) {
+    ctx.beginPath(); ctx.moveTo(44, y(v)); ctx.lineTo(w - 20, y(v)); ctx.stroke();
+    ctx.fillText(String(Math.round(v)), 6, y(v) + 4);
+  }
+  ctx.strokeStyle = '#E84142'; ctx.lineWidth = 2; ctx.beginPath();
+  priceHistory.forEach((p, i) => { if (i === 0) ctx.moveTo(x(i), y(p.price)); else ctx.lineTo(x(i), y(p.price)); });
+  ctx.stroke();
+  const last = priceHistory[priceHistory.length - 1];
+  ctx.fillStyle = '#eee'; ctx.beginPath(); ctx.arc(x(priceHistory.length - 1), y(last.price), 3.5, 0, Math.PI * 2); ctx.fill();
+  if (info) info.textContent = `最近 ${priceHistory.length} 笔成交 · 最新 ${last.price} · 区间 ${Math.min(...prices)}–${Math.max(...prices)}`;
+}
+
 function renderTrades(trades, prepend = false) {
+  recordTradePrices(trades, prepend);
   const body = document.getElementById('tradesBody');
   if (!prepend) body.innerHTML = '';
   if (!trades.length && !prepend) {
@@ -425,7 +492,7 @@ async function refreshMyOrders() {
 function renderPosition(p) {
   const body = document.getElementById('positionBody');
   if (!p || p.sizeSigned === '0') {
-    body.innerHTML = '<tr><td colspan="8" style="text-align:left;color:#9aa4af;">暂无仓位</td></tr>';
+    body.innerHTML = '<tr><td colspan="9" style="text-align:left;color:#9aa4af;">暂无仓位</td></tr>';
     return;
   }
   const isLong = BigInt(p.sizeSigned) > 0n;
@@ -436,7 +503,7 @@ function renderPosition(p) {
     `<td class="${isLong ? 'bid' : 'ask'}">${isLong ? '多 Long' : '空 Short'}</td>` +
     `<td>${absSize}</td><td>${p.entryPrice}</td><td>${p.markPrice}</td>` +
     `<td style="color:${pnl >= 0n ? '#2ecc71' : '#E84142'};">${p.unrealizedPnl}</td>` +
-    `<td>${p.marginAllocated}</td><td>${p.liquidationPrice ?? '-'}</td>`;
+    `<td>${p.marginAllocated}</td><td>${p.cumulativeFunding ?? '0'}</td><td>${p.liquidationPrice ?? '-'}</td>`;
   const td = document.createElement('td');
   const btn = document.createElement('button');
   btn.className = 'secondary small';
@@ -460,8 +527,18 @@ async function refreshPosition() {
       const m = await res.json();
       if (m.price) {
         const sourceText = { 'external-feed': '外部喂价', 'trade-twap': '成交 TWAP', 'last-trade': '最新成交价（样本不足兜底）' }[m.source] || m.source;
-        document.getElementById('markPriceInfo').textContent = ` 当前标记价 ${m.price}（来源：${sourceText}）。`;
+        document.getElementById('markPriceInfo').textContent = ` 当前标记价 ${m.price}（来源：${sourceText}${m.stale ? '，样本已过期、请谨慎参考' : ''}）。`;
       }
+    }
+  } catch {}
+  try {
+    const res = await fetch(`${apiUrl}/funding`);
+    if (res.ok) {
+      const f = await res.json();
+      const el = document.getElementById('fundingInfo');
+      if (el) el.textContent = f.indexPrice
+        ? ` 当前资金费率 ${f.rateBps} bps/期（指数价 ${f.indexPrice}，每 ${Math.round(f.intervalMs / 3600000)} 小时结算）。`
+        : ' 当前资金费率 0（未配置独立指数喂价，不结算资金费）。';
     }
   } catch {}
 }
@@ -533,27 +610,60 @@ async function buildBuyAuthorization(price, quantity) {
   };
 }
 
+function syncOrderType() {
+  const isMarket = document.getElementById('orderType').value === 'market';
+  const priceEl = document.getElementById('price');
+  const tifEl = document.getElementById('tif');
+  priceEl.disabled = isMarket;
+  priceEl.placeholder = isMarket ? '市价单无需填价' : '例如 2500';
+  if (isMarket) tifEl.value = 'IOC';
+  tifEl.disabled = isMarket;
+  document.getElementById('priceLabel').textContent = isMarket ? '价格（市价单不适用）' : '价格';
+}
+document.getElementById('orderType').addEventListener('change', syncOrderType);
+syncOrderType();
+
+/** 市价买单的授权上限：对手盘最优卖价（没有则标记价）上浮 5%，避免授权额度被无限放大 */
+async function marketBuyCapPrice() {
+  if (latestBestAsk) return (BigInt(latestBestAsk) * 105n + 99n) / 100n;
+  try {
+    const res = await fetch(`${apiUrl}/markprice`);
+    if (res.ok) {
+      const m = await res.json();
+      if (m.price) return (BigInt(m.price) * 105n + 99n) / 100n;
+    }
+  } catch {}
+  return null;
+}
+
 document.getElementById('placeOrderBtn').onclick = async () => {
   const btn = document.getElementById('placeOrderBtn');
   try {
     btn.disabled = true;
     const side = document.getElementById('side').value;
+    const orderType = document.getElementById('orderType').value;
     const price = document.getElementById('price').value.trim();
     const quantity = document.getElementById('quantity').value.trim();
-    if (!/^\d+$/.test(price) || BigInt(price) <= 0n) { log('下单失败: 价格必须是正整数'); return; }
+    if (orderType === 'limit' && (!/^\d+$/.test(price) || BigInt(price) <= 0n)) { log('下单失败: 限价单价格必须是正整数'); return; }
     if (!/^\d+$/.test(quantity) || BigInt(quantity) <= 0n) { log('下单失败: 数量必须是正整数'); return; }
 
     const body = {
       traderId: account,
       side,
-      price,
       quantity,
-      tif: document.getElementById('tif').value,
+      tif: orderType === 'market' ? 'IOC' : document.getElementById('tif').value,
       leverage: Number(document.getElementById('leverage').value),
-      type: 'limit',
+      type: orderType,
     };
+    if (orderType === 'limit') body.price = price;
     if (side === 'buy') {
-      const authorization = await buildBuyAuthorization(price, quantity);
+      let authPrice = price;
+      if (orderType === 'market') {
+        const cap = await marketBuyCapPrice();
+        if (!cap) { log('下单失败: 订单簿为空且无标记价，市价买单无法确定结算授权上限，请先改下限价单'); return; }
+        authPrice = cap.toString();
+      }
+      const authorization = await buildBuyAuthorization(authPrice, quantity);
       if (authorization) body.authorization = authorization;
     }
     const res = await fetch(`${apiUrl}/orders`, {

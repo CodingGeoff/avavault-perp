@@ -22,5 +22,12 @@ services:
       # 才计入可用保证金，再把 MARGIN_ENFORCE 改为 "true" 才会拦截保证金不足的买单。
       - key: MARGIN_ENFORCE
         value: "false"
+      # 资金费率：默认每 8 小时一期、费率封顶 ±10bps。费率由成交 TWAP 标记价相对
+      # 外部指数喂价的溢价决定；未配置 MARK_PRICE_FEED_URL 时没有独立指数价，
+      # 费率保持 0、不结算（不会拿标记价和它自己比出假溢价）。
+      - key: FUNDING_INTERVAL_MS
+        value: "28800000"
+      - key: FUNDING_MAX_BPS
+        value: "10"
       - key: OPERATOR_PRIVATE_KEY
         sync: false

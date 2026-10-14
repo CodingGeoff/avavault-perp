@@ -47,6 +47,11 @@ export class TwapMarkPrice {
     return this.samples.length ? this.samples[this.samples.length - 1].price : null;
   }
 
+  /** 最新样本的时间戳（毫秒）；无样本时为 null，供调用方判断标记价是否过期 */
+  latestTimestamp(): number | null {
+    return this.samples.length ? this.samples[this.samples.length - 1].timestamp : null;
+  }
+
   /**
    * 当前窗口的 TWAP；样本少于 2 个、或窗口内没有时间跨度时返回 null，
    * 表示"TWAP 还不可用"，调用方应退回兜底价格而不是假装有均价。

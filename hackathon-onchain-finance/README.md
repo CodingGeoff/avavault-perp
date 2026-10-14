@@ -2,8 +2,7 @@
 
 > **Avalanche Buildathon（OpenBuild × Team1 Avalanche）提交项目**
 > 赛道：链上金融与交易（On-chain Finance & Trading）
-> 状态：可运行的合约原型 + 完整测试 + 训练营三节课技术栈的真实融合
-> **提交截止：2026-10-07 23:59（已从原定 9/30 延期）**
+> 状态：可运行的合约原型 + 完整测试 + 训练营三节课技术栈的真实融合（已提交，进入演示阶段）
 > **提交入口：https://build.avax.network/events/093982ed-7037-4765-a066-56a5d3cff8cb**
 
 ## 提交材料清单
@@ -54,16 +53,16 @@ flowchart LR
     end
 
     U -- 存入 RWA Token --> Vault
-    Vault -- getAmountsOut 实时估值 --> Pair
+    Vault -- TwapOracle 时间加权估值（V2） --> Pair
     U -- 下单交易永续合约 --> Engine
     Engine -- 净额结算 --> PerpVault
-    Vault -. 未来: 作为额外保证金类型接入同一撮合系统 .- PerpVault
+    Vault -- totalAccountValue 已接入撮合服务保证金（服务层） --> Engine
     Bot -- 双边挂单提供流动性 --> Engine
 ```
 
 ## 技术实现（本次提交已经跑通的部分）
 
-### `MultiCollateralVault.sol`
+### `MultiCollateralVault.sol`（V1，历史版本；当前部署与演示用 V2，见后文安全加固一节）
 
 - `listCollateral(token, router, quoteToken, haircutBps)`：管理员登记一种可作保证金的资产，指定
   用哪个 DEX 路由计价、以什么资产计价、打几折（haircut，给价格波动和流动性风险留安全垫）。
@@ -164,7 +163,8 @@ forge script script/Deploy.s.sol:Deploy --rpc-url $FUJI_RPC_URL --broadcast --pr
    Task7 撮合系统里"可开仓保证金"的来源（✅ 服务层已接入：撮合服务实时读取金库的
    `totalAccountValue()` 并与 Vault 的 mUSDC 余额合成综合保证金视图，开启
    `MARGIN_ENFORCE` 后限价买单撮合前会校验该额度，见 `task7-perp-dex/server/src/margin.js`
-   与其测试 `test-margin.mjs`；把这笔估值正式绑定为仓位保证金仍待仓位系统完成后继续推进），允许 RWA Token 直接作为永续合约的抵押品，而不需要
+   与其测试 `test-margin.mjs`；仓位引擎已在此基础上把该估值作为服务层仓位
+   保证金来源，合约层绑定见 `contracts/src/PerpMarginAccount.sol`），允许 RWA Token 直接作为永续合约的抵押品，而不需要
    先换成 USDC。
 2. ~~**TWAP / 多源价格**~~：✅ 已在 `MultiCollateralVaultV2.sol` 中完成，见上一节。
 3. **清算引擎**：✅ 服务层已实现（仓位引擎按独立标记价监控权益，跌破维持保证金

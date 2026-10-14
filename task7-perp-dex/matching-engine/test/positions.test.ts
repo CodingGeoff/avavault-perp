@@ -158,3 +158,38 @@ describe("PositionManager — 序列化恢复", () => {  it("restore 能重建�
     expect(restored.leverage).toBe(5);
   });
 });
+
+describe("PositionManager — 资金费率", () => {
+  it("多空名义相等时结算现金流相互抵消", () => {
+    const pm = new PositionManager();
+    pm.applyTrade({ buyTraderId: ALICE, sellTraderId: BOB, price: 2500n, quantity: 10n });
+    const payments = pm.applyFunding(10); // 给定 +10bps：多头付、空头收
+    const alice = payments.find((p) => p.traderId === ALICE)!;
+    const bob = payments.find((p) => p.traderId === BOB)!;
+    expect(alice.cashflow).toBe(-25n); // 25000 * 10bps
+    expect(bob.cashflow).toBe(25n);
+    expect(alice.cashflow + bob.cashflow).toBe(0n);
+    expect(pm.snapshot(ALICE).cumulativeFunding).toBe(-25n);
+    expect(pm.snapshot(BOB).cumulativeFunding).toBe(25n);
+  });
+
+  it("费率由标记价相对指数价的溢价决定并封顶，无独立指数时为 0", () => {
+    expect(PositionManager.calculateFundingRateBps(2500n, 2400n, 10)).toBe(10); // +4.16% 溢价 -> 封顶
+    expect(PositionManager.calculateFundingRateBps(2500n, 2600n, 10)).toBe(-10); // 折价 -> 空头付
+    expect(PositionManager.calculateFundingRateBps(2501n, 2500n, 10)).toBe(4); // +4bps 小溢价不封顶
+    expect(PositionManager.calculateFundingRateBps(2500n, 2500n, 10)).toBe(0);
+    expect(PositionManager.calculateFundingRateBps(2500n, null, 10)).toBe(0); // 无独立指数不硬造费率
+  });
+
+  it("负费率时空头付多头；费率为 0 不产生现金流；累计资金费可序列化恢复", () => {
+    const pm = new PositionManager();
+    pm.applyTrade({ buyTraderId: ALICE, sellTraderId: BOB, price: 2500n, quantity: 10n });
+    expect(pm.applyFunding(0)).toHaveLength(0);
+    const payments = pm.applyFunding(-10);
+    expect(payments.find((p) => p.traderId === ALICE)!.cashflow).toBe(25n);
+    expect(payments.find((p) => p.traderId === BOB)!.cashflow).toBe(-25n);
+    const pm2 = new PositionManager();
+    pm2.restore(PositionManager.serialize(pm.getPosition(ALICE)));
+    expect(pm2.getPosition(ALICE).cumulativeFunding).toBe(25n);
+  });
+});

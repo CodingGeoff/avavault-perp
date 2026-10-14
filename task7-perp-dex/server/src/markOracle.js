@@ -40,20 +40,47 @@ export class MarkOracle {
     }
   }
 
-  /** @returns {Promise<{price: bigint, source: string}|null>} */
+  /** @returns {Promise<{price: bigint, source: string, asOf: number|null, stale: boolean}|null>} */
   async getMark() {
     if (this.feedUrl) {
       try {
-        return { price: await this.fetchFeedPrice(), source: "external-feed" };
+        const price = await this.fetchFeedPrice();
+        return { price, source: "external-feed", asOf: this.feedCache?.at ?? null, stale: false };
       } catch {
         // 喂价失败不致命：退回成交 TWAP
       }
     }
     const now = Date.now();
+    const asOf = this.twap.latestTimestamp();
+    const stale = asOf !== null && now - asOf > this.twap.windowMs;
     const twap = this.twap.getMark(now);
-    if (twap !== null) return { price: twap, source: "trade-twap" };
+    if (twap !== null) return { price: twap, source: "trade-twap", asOf, stale };
     const latest = this.twap.latest();
-    if (latest !== null) return { price: latest, source: "last-trade" };
+    if (latest !== null) return { price: latest, source: "last-trade", asOf, stale };
+    return null;
+  }
+
+  /** 独立指数价：只认外部喂价；没有配置/不可用时返回 null（调用方不应硬造资金费） */
+  async getIndexPrice() {
+    if (!this.feedUrl) return null;
+    try {
+      return await this.fetchFeedPrice();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 资金费输入：指数价 = 外部喂价，标记价 = 成交 TWAP（无 TWAP 时退回指数价，溢价为 0）。
+   * 两者同源时溢价天然为 0，不会凭空产生资金费。
+   */
+  async getFundingInputs() {
+    const indexPrice = await this.getIndexPrice();
+    const twap = this.twap.getMark(Date.now());
+    if (twap !== null) return { markPrice: twap, indexPrice, markSource: "trade-twap" };
+    if (indexPrice !== null) return { markPrice: indexPrice, indexPrice, markSource: "external-feed" };
+    const latest = this.twap.latest();
+    if (latest !== null) return { markPrice: latest, indexPrice, markSource: "last-trade" };
     return null;
   }
 }

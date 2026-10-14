@@ -45,3 +45,13 @@ describe("TwapMarkPrice", () => {
     expect(twap.latest()).toBe(2500n);
   });
 });
+
+describe("TwapMarkPrice — 新鲜度", () => {
+  it("latestTimestamp 返回最新样本时间，无样本为 null", () => {
+    const twap = new TwapMarkPrice({ windowMs: 60_000 });
+    expect(twap.latestTimestamp()).toBeNull();
+    twap.addSample(2500n, T0);
+    twap.addSample(2600n, T0 + 5_000);
+    expect(twap.latestTimestamp()).toBe(T0 + 5_000);
+  });
+});

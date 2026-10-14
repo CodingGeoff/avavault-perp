@@ -42,6 +42,7 @@ function startServer() {
       DB_PATH,
       MARK_PRICE_FEED_URL: `http://127.0.0.1:${feedServer.address().port}/price`,
       MARK_PRICE_FEED_CACHE_MS: "0",
+      FUNDING_INTERVAL_MS: "0",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -148,6 +149,31 @@ async function main() {
     check("bob short position restored after restart", restored.sizeSigned === "-10" && restored.entryPrice === "2500");
     const insuranceAfter = await (await fetch(`${API}/insurance`)).json();
     check("insurance state restored after restart", insuranceAfter.insuranceFund === "1000" && insuranceAfter.totalBadDebt === "500");
+
+    console.log("\n=== 6. input validation, market orders and funding ===");
+    const badSide = await placeOrder(bob, "hold", "2200", "1");
+    check("invalid side rejected (400)", badSide.status === 400);
+    const badType = await placeOrder(bob, "buy", "2200", "1", { type: "stop" });
+    check("invalid order type rejected (400)", badType.status === 400);
+
+    await placeOrder(dave, "sell", "2200", "1");
+    const marketBuy = await placeOrder(carol, "buy", "", "1", { type: "market", tif: "IOC" });
+    check("market buy executes against resting ask", marketBuy.status === 200 && marketBuy.data.trades?.length === 1);
+
+    // 指数价（外部喂价）设为 2000，成交 TWAP 仍在 2200 附近 -> 正溢价封顶 +10bps，
+    // Bob 的空头应收到资金费：10 * 2200 * 10bps = 22
+    feedPrice = 2000;
+    const fundingRes = await fetch(`${API}/funding/apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ traderId: bob.address }),
+    });
+    const funding = await fundingRes.json();
+    check("funding settles when due with capped positive rate", fundingRes.ok && funding.applied === true && funding.rateBps === 10);
+    const bobFunded = await getPosition(bob);
+    check("short receives funding into margin", bobFunded.cumulativeFunding === "22" && bobFunded.marginAllocated === "12522");
+    const fundingStatus = await (await fetch(`${API}/funding`)).json();
+    check("funding status exposes index/mark/open interest", fundingStatus.indexPrice === "2000" && fundingStatus.markPrice === "2200");
   } finally {
     await stopServer(server);
     feedServer.close();

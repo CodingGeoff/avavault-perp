@@ -228,24 +228,26 @@ RWA 抵押品经 TWAP 折价后的估值，与本系统 Vault 的 mUSDC 余额�
 
 验证：`server/test-margin.mjs`（16 项，含本地 JSON-RPC 桩端到端：Vault 余额为 0、
 仅靠 RWA 估值的买单通过校验，无保证金买单被拦截）；原有 `test-e2e.mjs`、
-`test-robustness.mjs` 与撮合引擎 21 个用例回归不受影响。边界：这是服务层的
-购买力校验，仓位系统（杠杆/强平）仍未实现，估值尚未在合约层绑定为仓位保证金。
+`test-robustness.mjs` 与撮合引擎测试回归不受影响。边界：这是服务层的购买力
+校验；仓位保证金绑定已在服务层实现（见 3.5），合约层绑定见黑客松目录的
+`PerpMarginAccount.sol`（待部署）。
 
 ### 3.5 永续仓位引擎（仓位 / 杠杆 / 强平）
 
 `matching-engine/src/positions.ts` 把订单簿成交记账为带杠杆的净仓位：多空净额、
 VWAP 入场价、初始保证金 = 名义价值 / 杠杆逐笔占用、平仓按比例释放并结算已实现
-盈亏、反手先平后开。标记价取最新成交价；权益（占用保证金 + 未实现盈亏）跌破
+盈亏、反手先平后开。标记价来自独立预言机（见下）；权益（占用保证金 + 未实现盈亏）跌破
 维持保证金（默认 5%，`MAINTENANCE_MARGIN_BPS` 可配）时自动以标记价强平，退回
 多余保证金、穿仓部分单独记为缺口。服务端在每笔成交后更新双方仓位、落库
 （重启恢复未平仓位）、私推 `position_update`，标记价移动引发的第三方仓位风险
 也会被全局扫描强平。接口：`GET /positions/:address`、`GET /positions`、
-`POST /positions/check-liquidations`；下单可带 `leverage`（1–20）。开启
+`POST /positions/check-liquidations`；下单可带 `leverage`（1–20），下单接口同时
+支持市价单（市价买单的 EIP-712 授权按最优卖价/标记价上浮 5% 封顶）。开启
 `MARGIN_ENFORCE` 时新敞口的保证金来自 3.4 的综合保证金（Vault mUSDC + RWA
 抵押估值）扣掉已占用部分，平仓方向不要求新保证金——即 RWA 估值在服务层正式
 成为仓位保证金来源。前端同步提供杠杆选择、仓位面板（浮盈亏/强平价）与一键平仓。
-验证：`matching-engine/test/positions.test.ts`（13 项）与
-`server/test-positions.mjs`（15 项，含崩盘强平与重启恢复）。
+验证：`matching-engine/test/positions.test.ts` 与 `server/test-positions.mjs`
+（含崩盘强平、市价单、资金费结算与重启恢复）。
 
 标记价已改为独立预言机（`server/src/markOracle.js`）：外部喂价
 （`MARK_PRICE_FEED_URL`）优先，其次成交 TWAP（`matching-engine/src/markPrice.ts`，
@@ -255,8 +257,16 @@ VWAP 入场价、初始保证金 = 名义价值 / 杠杆逐笔占用、平仓按
 （`GET /insurance` 查看，状态落库）。合约层对应实现见
 `hackathon-onchain-finance/contracts/src/PerpMarginAccount.sol`（直接读金库
 `totalAccountValue()` 计入仓位保证金，独立标记价强平、保险基金兜底，附
-Foundry 测试，待部署）。仍未实现：资金费率；链上净额结算沿用既有成交结算通道，
-保险基金在服务层为记账状态，真实注资应打入链上 Vault 后在此登记。
+Foundry 测试，待部署）。
+
+资金费率已实现：标记价（成交 TWAP）相对指数价（外部喂价）的溢价决定费率
+（封顶 ±`FUNDING_MAX_BPS`，默认 10bps），每 `FUNDING_INTERVAL_MS`（默认 8 小时）
+结算一期，多头付空头或反之，现金流直接调整仓位保证金并累计在
+`cumulativeFunding`；`GET /funding` 查状态、`POST /funding/apply` 在到期时触发
+结算。没有配置独立指数喂价时费率为 0、不结算。仍未实现：开放清算人网络、
+多 operator/多签；链上净额结算沿用既有成交结算通道，保险基金在服务层为记账
+状态，真实注资应打入链上 Vault 后在此登记。SQLite 仍是单机持久化（Render
+免费层磁盘不持久，重启/重新部署会清掉演示状态，生产应换托管数据库）。
 
 ### 3.6 会话与私有推送加固
 

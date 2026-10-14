@@ -76,12 +76,12 @@ export function getClearingValue(key) {
 /** 仓位落库（永续仓位引擎的状态，重启后恢复未平仓位而不是从零开始） */
 export function persistPosition(serialized) {
   db.prepare(
-    `INSERT INTO positions (traderId, sizeSigned, entryPrice, marginAllocated, leverage, realizedPnl, updatedAt)
-     VALUES (@traderId, @sizeSigned, @entryPrice, @marginAllocated, @leverage, @realizedPnl, @updatedAt)
+    `INSERT INTO positions (traderId, sizeSigned, entryPrice, marginAllocated, leverage, realizedPnl, cumulativeFunding, updatedAt)
+     VALUES (@traderId, @sizeSigned, @entryPrice, @marginAllocated, @leverage, @realizedPnl, @cumulativeFunding, @updatedAt)
      ON CONFLICT(traderId) DO UPDATE SET sizeSigned=excluded.sizeSigned, entryPrice=excluded.entryPrice,
        marginAllocated=excluded.marginAllocated, leverage=excluded.leverage,
-       realizedPnl=excluded.realizedPnl, updatedAt=excluded.updatedAt`
-  ).run({ ...serialized, updatedAt: Date.now() });
+       realizedPnl=excluded.realizedPnl, cumulativeFunding=excluded.cumulativeFunding, updatedAt=excluded.updatedAt`
+  ).run({ ...serialized, cumulativeFunding: serialized.cumulativeFunding ?? "0", updatedAt: Date.now() });
 }
 
 export function loadPositions() {
@@ -113,6 +113,11 @@ if (!orderColumns.includes("authorization")) {
 }
 if (!orderColumns.includes("leverage")) {
   db.exec(`ALTER TABLE orders ADD COLUMN leverage INTEGER NOT NULL DEFAULT 1`);
+}
+// 迁移：老库的 positions 表没有 cumulativeFunding 列（资金费累计现金流）
+const positionColumns = db.prepare(`PRAGMA table_info(positions)`).all().map((c) => c.name);
+if (!positionColumns.includes("cumulativeFunding")) {
+  db.exec(`ALTER TABLE positions ADD COLUMN cumulativeFunding TEXT NOT NULL DEFAULT '0'`);
 }
 
 const upsertOrderStmt = db.prepare(`

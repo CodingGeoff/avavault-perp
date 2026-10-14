@@ -168,6 +168,7 @@ for (const row of loadPositions()) {
     marginAllocated: row.marginAllocated,
     leverage: row.leverage,
     realizedPnl: row.realizedPnl,
+    cumulativeFunding: row.cumulativeFunding ?? "0",
   });
 }
 if (recentTrades.length) positions.setMarkPrice(BigInt(recentTrades[0].price));
@@ -218,6 +219,7 @@ function serializePositionSnapshot(s) {
     marginAllocated: s.marginAllocated.toString(),
     leverage: s.leverage,
     realizedPnl: s.realizedPnl.toString(),
+    cumulativeFunding: s.cumulativeFunding.toString(),
     markPrice: s.markPrice.toString(),
     unrealizedPnl: s.unrealizedPnl.toString(),
     equity: s.equity.toString(),
@@ -229,6 +231,86 @@ function serializePositionSnapshot(s) {
 
 function persistSnapshot(s) {
   persistPosition(PositionManager.serialize(s));
+}
+
+// ---------------------------------------------------------------
+// 资金费率：标记价（成交 TWAP）相对指数价（外部喂价）的溢价决定费率，
+// 多头付空头或反之；没有独立指数喂价时费率为 0、不结算（不拿标记价和自己比）。
+// 每 FUNDING_INTERVAL_MS 结算一期（默认 8 小时），状态落库，重启不重复结算同一期。
+// ---------------------------------------------------------------
+const FUNDING_INTERVAL_MS = Number(process.env.FUNDING_INTERVAL_MS ?? 8 * 3600 * 1000);
+const FUNDING_MAX_BPS = (() => {
+  const v = Number(process.env.FUNDING_MAX_BPS || 10);
+  return Number.isInteger(v) && v >= 0 && v <= 100 ? v : 10;
+})();
+let lastFundingAt = Number(getClearingValue("lastFundingAt") || 0);
+let lastFundingRateBps = Number(getClearingValue("lastFundingRateBps") || 0);
+
+async function getFundingStatus() {
+  const inputs = await markOracle.getFundingInputs();
+  const oi = positions.getOpenInterest();
+  const rateBps = inputs
+    ? PositionManager.calculateFundingRateBps(inputs.markPrice, inputs.indexPrice, FUNDING_MAX_BPS)
+    : 0;
+  return {
+    rateBps,
+    lastRateBps: lastFundingRateBps,
+    maxAbsBps: FUNDING_MAX_BPS,
+    intervalMs: FUNDING_INTERVAL_MS,
+    lastFundingAt: lastFundingAt || null,
+    nextFundingAt: FUNDING_INTERVAL_MS > 0 ? (lastFundingAt || Date.now()) + FUNDING_INTERVAL_MS : null,
+    indexPrice: inputs?.indexPrice ? inputs.indexPrice.toString() : null,
+    markPrice: inputs ? inputs.markPrice.toString() : null,
+    markSource: inputs?.markSource ?? null,
+    longNotional: oi.longNotional.toString(),
+    shortNotional: oi.shortNotional.toString(),
+  };
+}
+
+function serializeFundingPayments(payments) {
+  return payments.map((p) => ({
+    traderId: p.traderId,
+    sizeSigned: p.sizeSigned.toString(),
+    rateBps: p.rateBps,
+    cashflow: p.cashflow.toString(),
+    marginAllocated: p.marginAllocated.toString(),
+    cumulativeFunding: p.cumulativeFunding.toString(),
+  }));
+}
+
+/** 到期才真正结算一期资金费；未到期/无独立指数时只返回状态不产生现金流 */
+async function applyFundingIfDue() {
+  const now = Date.now();
+  if (FUNDING_INTERVAL_MS > 0 && lastFundingAt && now - lastFundingAt < FUNDING_INTERVAL_MS) {
+    return { applied: false, reason: "not due", payments: [], ...(await getFundingStatus()) };
+  }
+  const inputs = await markOracle.getFundingInputs();
+  if (!inputs) {
+    return { applied: false, reason: "no mark/index price", payments: [], ...(await getFundingStatus()) };
+  }
+  const rateBps = PositionManager.calculateFundingRateBps(inputs.markPrice, inputs.indexPrice, FUNDING_MAX_BPS);
+  positions.setMarkPrice(inputs.markPrice);
+  const payments = positions.applyFunding(rateBps);
+  for (const p of payments) {
+    persistSnapshot(positions.snapshot(p.traderId));
+    pushPrivate(p.traderId, "position_update", serializePositionSnapshot(positions.snapshot(p.traderId)));
+  }
+  lastFundingAt = now;
+  lastFundingRateBps = rateBps;
+  setClearingValue("lastFundingAt", String(lastFundingAt));
+  setClearingValue("lastFundingRateBps", String(lastFundingRateBps));
+  if (payments.length) {
+    broadcastPublic("funding", { rateBps, payments: serializeFundingPayments(payments), at: now });
+    console.log(`[funding] settled rate=${rateBps}bps payments=${payments.length}`);
+  }
+  const liquidated = runLiquidations();
+  return {
+    applied: true,
+    rateBps,
+    payments: serializeFundingPayments(payments),
+    liquidated,
+    ...(await getFundingStatus()),
+  };
 }
 
 /** 标记价变动后全局扫描并执行强平，返回强平记录（已序列化） */
@@ -274,6 +356,26 @@ for (const row of loadSessions()) {
 }
 if (sessions.size) console.log(`[startup] restored ${sessions.size} login session(s) from SQLite`);
 
+const SESSION_MAX_AGE_MS = Number(process.env.SESSION_MAX_AGE_MS || 7 * 24 * 3600 * 1000);
+/** 会话是否仍在有效期内；过期顺手清理内存索引（DB 侧在下次启动 loadSessions 时清） */
+function hasActiveSession(address) {
+  if (!address) return false;
+  const key = String(address).toLowerCase();
+  const s = sessions.get(key);
+  if (!s) return false;
+  if (Date.now() - s.createdAt > SESSION_MAX_AGE_MS) {
+    sessions.delete(key);
+    sessionAddressByToken.delete(s.token);
+    return false;
+  }
+  return true;
+}
+function addressForSessionToken(token) {
+  if (!token) return null;
+  const address = sessionAddressByToken.get(token) || null;
+  return address && hasActiveSession(address) ? address : null;
+}
+
 function toBigIntSafe(v) {
   return typeof v === "bigint" ? v : BigInt(v);
 }
@@ -297,6 +399,28 @@ function serializeSnapshot(snap) {
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// 轻量内存限流（无需额外依赖）：挡住登录签名重放刷接口与下单灌水这类低成本滥用。
+// 阈值按演示/做市场景留足余量，做市机器人 8 秒一轮双边 6 单也远低于上限；
+// 可用 RATE_LIMIT_ORDERS_PER_MIN / RATE_LIMIT_LOGIN_PER_MIN 覆盖，设 0 关闭。
+function makeRateLimiter(limitPerMin) {
+  const hits = new Map(); // ip -> number[] timestamps
+  return (req, res, next) => {
+    if (!limitPerMin || limitPerMin <= 0) return next();
+    const now = Date.now();
+    const key = req.ip || req.socket?.remoteAddress || "unknown";
+    const arr = (hits.get(key) || []).filter((t) => now - t < 60_000);
+    if (arr.length >= limitPerMin) {
+      hits.set(key, arr);
+      return res.status(429).json({ error: "rate limit exceeded, please retry later" });
+    }
+    arr.push(now);
+    hits.set(key, arr);
+    next();
+  };
+}
+app.use("/auth/login", makeRateLimiter(Number(process.env.RATE_LIMIT_LOGIN_PER_MIN || 60)));
+app.use("/orders", makeRateLimiter(Number(process.env.RATE_LIMIT_ORDERS_PER_MIN || 300)));
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
@@ -326,7 +450,7 @@ wss.on("connection", (ws, req) => {
   // 私有推送只认登录时发放的 sessionToken；只带 address 参数的连接退化为
   // 公开频道（能看订单簿快照，收不到任何人的 order_update / settled 私有事件）。
   const token = url.searchParams.get("token");
-  const address = token ? sessionAddressByToken.get(token) || null : null;
+  const address = addressForSessionToken(token);
   clients.set(ws, address);
   ws.send(JSON.stringify({ type: "snapshot", payload: serializeSnapshot(book.getSnapshot()) }));
   ws.on("close", () => clients.delete(ws));
@@ -343,6 +467,8 @@ app.get("/health", (_req, res) =>
     settlementVersion: VAULT_ABI_VERSION,
     marginEnforce: MARGIN_ENFORCE,
     rwaCollateralCounted: marginService.rwaCounted,
+    fundingIntervalMs: FUNDING_INTERVAL_MS,
+    fundingMaxBps: FUNDING_MAX_BPS,
   })
 );
 
@@ -450,10 +576,26 @@ app.post("/positions/check-liquidations", async (_req, res) => {
   res.json({ liquidated: runLiquidations(), mark: mark ? { price: mark.price.toString(), source: mark.source } : null });
 });
 
-/** 当前标记价及其来源（外部喂价 / 成交 TWAP / 最新成交价兜底） */
+/** 当前标记价及其来源（外部喂价 / 成交 TWAP / 最新成交价兜底）+ 新鲜度 */
 app.get("/markprice", async (_req, res) => {
   const mark = await markOracle.getMark();
-  res.json(mark ? { price: mark.price.toString(), source: mark.source } : { price: null, source: "unavailable" });
+  res.json(mark
+    ? { price: mark.price.toString(), source: mark.source, asOf: mark.asOf, stale: mark.stale }
+    : { price: null, source: "unavailable", asOf: null, stale: true });
+});
+
+/** 资金费率状态：当前指示费率、多空名义、上次/下次结算时间 */
+app.get("/funding", async (_req, res) => {
+  res.json(await getFundingStatus());
+});
+
+/** 触发资金费结算（仅到期时真正结算；登录用户可调用，未到期返回 applied:false） */
+app.post("/funding/apply", async (req, res) => {
+  const { traderId } = req.body || {};
+  if (!traderId || !hasActiveSession(traderId)) {
+    return res.status(401).json({ error: "please /auth/login first" });
+  }
+  res.json(await applyFundingIfDue());
 });
 
 /** 保险基金状态：余额、累计兜底、累计坏账 */
@@ -464,8 +606,11 @@ app.get("/insurance", (_req, res) => {
 /** 向保险基金注资（记账层；真实部署时这笔钱应由运营方打入链上 Vault 并在此登记） */
 app.post("/insurance/fund", (req, res) => {
   const { traderId, amount } = req.body || {};
-  if (!traderId || !sessions.has(String(traderId).toLowerCase())) {
+  if (!traderId || !hasActiveSession(traderId)) {
     return res.status(401).json({ error: "please /auth/login first" });
+  }
+  if (!ethers.isAddress(traderId)) {
+    return res.status(400).json({ error: "traderId must be an address" });
   }
   try {
     const value = BigInt(amount);
@@ -481,8 +626,36 @@ app.post("/insurance/fund", (req, res) => {
 app.post("/orders", async (req, res) => {
   try {
     const { traderId, side, price, quantity, type, tif, authorization } = req.body;
-    if (!sessions.has(String(traderId).toLowerCase())) {
+    if (!hasActiveSession(traderId)) {
       return res.status(401).json({ error: "please /auth/login first" });
+    }
+    if (!ethers.isAddress(traderId)) {
+      return res.status(400).json({ error: "traderId must be an address" });
+    }
+    if (side !== "buy" && side !== "sell") {
+      return res.status(400).json({ error: "side must be buy or sell" });
+    }
+    const orderType = type || "limit";
+    if (orderType !== "limit" && orderType !== "market") {
+      return res.status(400).json({ error: "type must be limit or market" });
+    }
+    const orderTif = tif || (orderType === "market" ? "IOC" : "GTC");
+    if (!["GTC", "IOC", "FOK"].includes(orderTif)) {
+      return res.status(400).json({ error: "tif must be GTC, IOC or FOK" });
+    }
+    if (orderType === "market" && orderTif === "GTC") {
+      return res.status(400).json({ error: "market order cannot be GTC" });
+    }
+    let qtyForCheck;
+    try {
+      qtyForCheck = toBigIntSafe(quantity);
+      if (qtyForCheck <= 0n) throw new Error("quantity must be > 0");
+      if (orderType === "limit") {
+        const p = toBigIntSafe(price);
+        if (p <= 0n) throw new Error("limit order requires price > 0");
+      }
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
     }
     const leverage = req.body.leverage === undefined ? 1 : Number(req.body.leverage);
     if (!Number.isInteger(leverage) || leverage < 1 || leverage > positions.maxLeverage) {
@@ -490,11 +663,16 @@ app.post("/orders", async (req, res) => {
     }
     // 仓位保证金校验（可选开启）：新增敞口需要的保证金 = 新增名义价值 / 杠杆，
     // 可用额度 = 综合保证金（Vault mUSDC + 已计入的 RWA 抵押估值）- 已被未平
-    // 仓位占用的部分。纯平仓方向不新增占用、不需要保证金。市价单价格不确定，
-    // 本原型只对限价单做这项校验。
-    if (MARGIN_ENFORCE && (type || "limit") === "limit") {
-      const qty = toBigIntSafe(quantity);
-      const notionalPrice = toBigIntSafe(price);
+    // 仓位占用的部分。纯平仓方向不新增占用、不需要保证金。市价单用对手盘
+    // 最优价（无盘口时退标记价）估算名义价值，避免市价单绕过保证金校验。
+    if (MARGIN_ENFORCE) {
+      const qty = qtyForCheck;
+      const notionalPrice = orderType === "limit"
+        ? toBigIntSafe(price)
+        : ((side === "buy" ? book.getBestAsk() : book.getBestBid()) ?? positions.getMarkPrice());
+      if (notionalPrice === null || notionalPrice === undefined) {
+        return res.status(503).json({ error: "margin check unavailable: no reference price for market order" });
+      }
       const current = positions.getPosition(traderId);
       const absSize = current.sizeSigned > 0n ? current.sizeSigned : -current.sizeSigned;
       const isReducing =
@@ -529,10 +707,10 @@ app.post("/orders", async (req, res) => {
       traderId,
       side,
       quantity: toBigIntSafe(quantity),
-      type: type || "limit",
-      tif: tif || undefined,
+      type: orderType,
+      tif: orderTif,
     };
-    if (price !== undefined && price !== null) input.price = toBigIntSafe(price);
+    if (orderType === "limit" && price !== undefined && price !== null) input.price = toBigIntSafe(price);
 
     const { order, trades } = book.placeOrder(input);
     order.leverage = leverage;
@@ -636,7 +814,7 @@ app.post("/orders/:id/cancel", (req, res) => {
   // （order-1、order-2… 顺序可猜）就能撤掉别人的挂单，属于未授权操作。
   const { traderId } = req.body || {};
   if (!traderId) return res.status(400).json({ error: "traderId is required to cancel an order" });
-  if (!sessions.has(String(traderId).toLowerCase())) {
+  if (!hasActiveSession(traderId)) {
     return res.status(401).json({ error: "please /auth/login first" });
   }
   const existing = book.getOrder(req.params.id);
@@ -655,6 +833,14 @@ app.post("/orders/:id/cancel", (req, res) => {
   }
   res.json({ ok });
 });
+
+// 资金费到期结算：每分钟检查一次，是否真正结算由 applyFundingIfDue 按周期判断
+if (FUNDING_INTERVAL_MS >= 0) {
+  const fundingTimer = setInterval(() => {
+    applyFundingIfDue().catch((e) => console.error("[funding] scheduler error:", e.message));
+  }, 60_000);
+  fundingTimer.unref?.();
+}
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Mini-Dex server listening on http://0.0.0.0:${PORT}`);
