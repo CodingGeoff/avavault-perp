@@ -10,7 +10,8 @@
     "test:robustness": "node test-robustness.mjs",
     "test:margin": "node test-margin.mjs",
     "test:positions": "node test-positions.mjs",
-    "test:edgecases": "node test-edgecases.mjs"
+    "test:edgecases": "node test-edgecases.mjs",
+    "test:stress": "node test-stress.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.5.0",
