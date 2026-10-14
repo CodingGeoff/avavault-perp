@@ -626,11 +626,11 @@ app.post("/insurance/fund", (req, res) => {
 app.post("/orders", async (req, res) => {
   try {
     const { traderId, side, price, quantity, type, tif, authorization } = req.body;
-    if (!hasActiveSession(traderId)) {
-      return res.status(401).json({ error: "please /auth/login first" });
-    }
     if (!ethers.isAddress(traderId)) {
       return res.status(400).json({ error: "traderId must be an address" });
+    }
+    if (!hasActiveSession(traderId)) {
+      return res.status(401).json({ error: "please /auth/login first" });
     }
     if (side !== "buy" && side !== "sell") {
       return res.status(400).json({ error: "side must be buy or sell" });
