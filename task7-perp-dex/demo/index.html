@@ -106,7 +106,7 @@
       <thead><tr><th>方向</th><th>数量</th><th>入场价</th><th>标记价</th><th>未实现盈亏</th><th>占用保证金</th><th>强平价</th><th></th></tr></thead>
       <tbody id="positionBody"><tr><td colspan="8" style="text-align:left;color:#9aa4af;">暂无仓位</td></tr></tbody>
     </table>
-    <div class="hint">仓位保证金来自综合保证金（Vault mUSDC 余额 + RWA 抵押估值）；标记价取最新成交价，权益跌破维持保证金（5%）将触发强平。</div>
+    <div class="hint">仓位保证金来自综合保证金（Vault mUSDC 余额 + RWA 抵押估值）；权益跌破维持保证金（5%）将触发强平。<span id="markPriceInfo"></span></div>
   </div>
 
   <div class="card full">
@@ -453,6 +453,16 @@ async function refreshPosition() {
   try {
     const res = await fetch(`${apiUrl}/positions/${account}`);
     if (res.ok) renderPosition(await res.json());
+  } catch {}
+  try {
+    const res = await fetch(`${apiUrl}/markprice`);
+    if (res.ok) {
+      const m = await res.json();
+      if (m.price) {
+        const sourceText = { 'external-feed': '外部喂价', 'trade-twap': '成交 TWAP', 'last-trade': '最新成交价（样本不足兜底）' }[m.source] || m.source;
+        document.getElementById('markPriceInfo').textContent = ` 当前标记价 ${m.price}（来源：${sourceText}）。`;
+      }
+    }
   } catch {}
 }
 

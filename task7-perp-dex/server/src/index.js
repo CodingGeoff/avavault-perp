@@ -6,7 +6,8 @@ import { ethers } from "ethers";
 import { randomBytes } from "node:crypto";
 import { OrderBook } from "../../matching-engine/dist/orderbook.js";
 import { PositionManager } from "../../matching-engine/dist/positions.js";
-import { persistOrderResult, persistOrderState, markTradeSettled, loadRecentTrades, loadOpenOrders, persistSession, loadSessions, persistPosition, loadPositions } from "./db.js";
+import { persistOrderResult, persistOrderState, markTradeSettled, loadRecentTrades, loadOpenOrders, persistSession, loadSessions, persistPosition, loadPositions, setClearingValue, getClearingValue } from "./db.js";
+import { MarkOracle } from "./markOracle.js";
 import { MarginService, parsePriceToE6 } from "./margin.js";
 
 const PORT = process.env.PORT || 4000;
@@ -172,6 +173,43 @@ for (const row of loadPositions()) {
 if (recentTrades.length) positions.setMarkPrice(BigInt(recentTrades[0].price));
 console.log(`[startup] restored ${loadPositions().length} open position(s) from SQLite`);
 
+// 标记价预言机：外部喂价（可选）> 成交 TWAP > 最新成交价，见 src/markOracle.js
+const markOracle = new MarkOracle({
+  windowMs: Number(process.env.MARK_PRICE_WINDOW_SEC || 300) * 1000,
+  feedUrl: process.env.MARK_PRICE_FEED_URL || "",
+  feedCacheMs: Number(process.env.MARK_PRICE_FEED_CACHE_MS || 1000),
+});
+for (const t of loadRecentTrades(50).reverse()) {
+  markOracle.addTradeSample(BigInt(t.price), Date.now());
+}
+
+// 保险基金状态恢复与落库（强平罚金/穿仓兜底的账本，见 positions.ts）
+{
+  const fund = getClearingValue("insuranceFund");
+  if (fund !== null) {
+    positions.restoreInsuranceState({
+      insuranceFund: BigInt(fund),
+      totalInsuranceCovered: BigInt(getClearingValue("totalInsuranceCovered") || "0"),
+      totalBadDebt: BigInt(getClearingValue("totalBadDebt") || "0"),
+    });
+  }
+}
+function persistInsuranceState() {
+  const s = positions.getInsuranceState();
+  setClearingValue("insuranceFund", s.insuranceFund.toString());
+  setClearingValue("totalInsuranceCovered", s.totalInsuranceCovered.toString());
+  setClearingValue("totalBadDebt", s.totalBadDebt.toString());
+}
+
+function serializeInsuranceState() {
+  const s = positions.getInsuranceState();
+  return {
+    insuranceFund: s.insuranceFund.toString(),
+    totalInsuranceCovered: s.totalInsuranceCovered.toString(),
+    totalBadDebt: s.totalBadDebt.toString(),
+  };
+}
+
 function serializePositionSnapshot(s) {
   return {
     traderId: s.traderId,
@@ -208,12 +246,18 @@ function runLiquidations() {
       pnl: rec.pnl.toString(),
       returnedMargin: rec.returnedMargin.toString(),
       deficit: rec.deficit.toString(),
+      insuranceCovered: rec.insuranceCovered.toString(),
+      badDebt: rec.badDebt.toString(),
+      penalty: rec.penalty.toString(),
     };
     records.push(serialized);
     pushPrivate(rec.traderId, "liquidated", serialized);
     console.log(`[liquidation] ${rec.traderId} liquidated at ${rec.liquidationPrice}, pnl=${rec.pnl}, deficit=${rec.deficit}`);
   }
-  if (records.length) broadcastPublic("liquidations", records);
+  if (records.length) {
+    persistInsuranceState();
+    broadcastPublic("liquidations", records);
+  }
   return records;
 }
 
@@ -400,8 +444,38 @@ app.get("/positions", (_req, res) => {
 });
 
 /** 任何人可触发的强平检查（真实系统里这一步由清算人抢跑，这里开放触发） */
-app.post("/positions/check-liquidations", (_req, res) => {
-  res.json({ liquidated: runLiquidations() });
+app.post("/positions/check-liquidations", async (_req, res) => {
+  const mark = await markOracle.getMark();
+  if (mark) positions.setMarkPrice(mark.price);
+  res.json({ liquidated: runLiquidations(), mark: mark ? { price: mark.price.toString(), source: mark.source } : null });
+});
+
+/** 当前标记价及其来源（外部喂价 / 成交 TWAP / 最新成交价兜底） */
+app.get("/markprice", async (_req, res) => {
+  const mark = await markOracle.getMark();
+  res.json(mark ? { price: mark.price.toString(), source: mark.source } : { price: null, source: "unavailable" });
+});
+
+/** 保险基金状态：余额、累计兜底、累计坏账 */
+app.get("/insurance", (_req, res) => {
+  res.json(serializeInsuranceState());
+});
+
+/** 向保险基金注资（记账层；真实部署时这笔钱应由运营方打入链上 Vault 并在此登记） */
+app.post("/insurance/fund", (req, res) => {
+  const { traderId, amount } = req.body || {};
+  if (!traderId || !sessions.has(String(traderId).toLowerCase())) {
+    return res.status(401).json({ error: "please /auth/login first" });
+  }
+  try {
+    const value = BigInt(amount);
+    if (value <= 0n) throw new Error("amount must be > 0");
+    positions.fundInsurance(value);
+    persistInsuranceState();
+    res.json(serializeInsuranceState());
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 app.post("/orders", async (req, res) => {
@@ -494,8 +568,18 @@ app.post("/orders", async (req, res) => {
         });
         persistSnapshot(buyer);
         persistSnapshot(seller);
+        markOracle.addTradeSample(t.price);
         pushPrivate(t.buyTraderId, "position_update", serializePositionSnapshot(buyer));
         pushPrivate(t.sellTraderId, "position_update", serializePositionSnapshot(seller));
+      }
+      // 标记价不直接用最新成交价：先问预言机（外部喂价 > 成交 TWAP > 兜底），
+      // 再扫描强平，避免一笔小额成交把标记价砸到别人的强平线上。
+      const mark = await markOracle.getMark();
+      if (mark) {
+        positions.setMarkPrice(mark.price);
+        for (const traderId of new Set(trades.flatMap((t) => [t.buyTraderId, t.sellTraderId]))) {
+          pushPrivate(traderId, "position_update", serializePositionSnapshot(positions.snapshot(traderId)));
+        }
       }
       runLiquidations();
     }

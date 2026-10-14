@@ -244,10 +244,19 @@ VWAP 入场价、初始保证金 = 名义价值 / 杠杆逐笔占用、平仓按
 `MARGIN_ENFORCE` 时新敞口的保证金来自 3.4 的综合保证金（Vault mUSDC + RWA
 抵押估值）扣掉已占用部分，平仓方向不要求新保证金——即 RWA 估值在服务层正式
 成为仓位保证金来源。前端同步提供杠杆选择、仓位面板（浮盈亏/强平价）与一键平仓。
-验证：`matching-engine/test/positions.test.ts`（10 项）与
-`server/test-positions.mjs`（10 项，含崩盘强平与重启恢复）。边界：资金费率、
-以预言机（而非最新成交价）为标记价、穿仓缺口的保险基金结算仍未实现；强平
-盈亏目前记在仓位账上，链上净额结算沿用既有成交结算通道。
+验证：`matching-engine/test/positions.test.ts`（13 项）与
+`server/test-positions.mjs`（15 项，含崩盘强平与重启恢复）。
+
+标记价已改为独立预言机（`server/src/markOracle.js`）：外部喂价
+（`MARK_PRICE_FEED_URL`）优先，其次成交 TWAP（`matching-engine/src/markPrice.ts`，
+单笔瞬时成交拉不动），样本不足才退回最新成交价且如实标注来源；`GET /markprice`
+可查当前标记价与来源。强平穿仓由保险基金兜底：强平罚金（名义价值 0.5%）与
+`POST /insurance/fund` 注资进入基金，强平时缺口先扣基金、不足记坏账
+（`GET /insurance` 查看，状态落库）。合约层对应实现见
+`hackathon-onchain-finance/contracts/src/PerpMarginAccount.sol`（直接读金库
+`totalAccountValue()` 计入仓位保证金，独立标记价强平、保险基金兜底，附
+Foundry 测试，待部署）。仍未实现：资金费率；链上净额结算沿用既有成交结算通道，
+保险基金在服务层为记账状态，真实注资应打入链上 Vault 后在此登记。
 
 ### 3.6 会话与私有推送加固
 

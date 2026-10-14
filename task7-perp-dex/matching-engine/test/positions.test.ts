@@ -107,8 +107,44 @@ describe("PositionManager — 盈亏、维持保证金与强平", () => {
   });
 });
 
-describe("PositionManager — 序列化恢复", () => {
-  it("restore 能重建仓位状态", () => {
+describe("PositionManager — 保险基金与穿仓兜底", () => {
+  it("强平时剩余权益按名义价值收罚金、计入保险基金", () => {
+    const pm = new PositionManager({ maintenanceMarginBps: 500, liquidationPenaltyBps: 50 });
+    pm.applyTrade({ buyTraderId: ALICE, sellTraderId: BOB, price: 2500n, quantity: 10n, buyLeverage: 10 });
+    pm.setMarkPrice(2350n); // 亏 1500，权益 1000 < 维持保证金 1175
+    const rec = pm.liquidate(ALICE)!;
+    expect(rec.penalty).toBe(117n); // 23500 * 0.5%，向下取整
+    expect(rec.returnedMargin).toBe(1000n - 117n);
+    expect(pm.insuranceFund).toBe(117n);
+  });
+
+  it("穿仓缺口先由保险基金兜底，不够才记坏账", () => {
+    const pm = new PositionManager({ maintenanceMarginBps: 500 });
+    pm.fundInsurance(300n);
+    pm.applyTrade({ buyTraderId: ALICE, sellTraderId: BOB, price: 2500n, quantity: 10n, buyLeverage: 10 });
+    pm.setMarkPrice(2200n); // 亏 3000，保证金 2500，缺口 500
+    const rec = pm.liquidate(ALICE)!;
+    expect(rec.deficit).toBe(500n);
+    expect(rec.insuranceCovered).toBe(300n);
+    expect(rec.badDebt).toBe(200n);
+    expect(pm.insuranceFund).toBe(0n);
+    expect(pm.totalInsuranceCovered).toBe(300n);
+    expect(pm.totalBadDebt).toBe(200n);
+  });
+
+  it("保险基金充足时缺口被完全兜底、无坏账", () => {
+    const pm = new PositionManager({ maintenanceMarginBps: 500 });
+    pm.fundInsurance(10_000n);
+    pm.applyTrade({ buyTraderId: ALICE, sellTraderId: BOB, price: 2500n, quantity: 10n, buyLeverage: 10 });
+    pm.setMarkPrice(2200n);
+    const rec = pm.liquidate(ALICE)!;
+    expect(rec.insuranceCovered).toBe(500n);
+    expect(rec.badDebt).toBe(0n);
+    expect(pm.insuranceFund).toBe(9_500n);
+  });
+});
+
+describe("PositionManager — 序列化恢复", () => {  it("restore 能重建仓位状态", () => {
     const pm = new PositionManager();
     const { buyer } = pm.applyTrade({
       buyTraderId: ALICE, sellTraderId: BOB, price: 2500n, quantity: 10n, buyLeverage: 5,

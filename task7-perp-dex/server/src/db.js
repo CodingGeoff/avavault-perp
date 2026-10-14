@@ -53,7 +53,25 @@ CREATE TABLE IF NOT EXISTS positions (
   realizedPnl TEXT NOT NULL,
   updatedAt INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS clearing_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `);
+
+/** 清算层状态（保险基金余额/累计兜底/累计坏账）的键值落库 */
+export function setClearingValue(key, value) {
+  db.prepare(
+    `INSERT INTO clearing_state (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value=excluded.value`
+  ).run(key, String(value));
+}
+
+export function getClearingValue(key) {
+  const row = db.prepare(`SELECT value FROM clearing_state WHERE key = ?`).get(key);
+  return row ? row.value : null;
+}
 
 /** 仓位落库（永续仓位引擎的状态，重启后恢复未平仓位而不是从零开始） */
 export function persistPosition(serialized) {

@@ -42,6 +42,12 @@ export interface LiquidationRecord {
   pnl: bigint;
   returnedMargin: bigint;
   deficit: bigint;
+  /** 穿仓缺口中由保险基金实际兜底的部分 */
+  insuranceCovered: bigint;
+  /** 保险基金也不足时的剩余坏账 */
+  badDebt: bigint;
+  /** 本次强平罚金（计入保险基金） */
+  penalty: bigint;
 }
 
 const BPS_DENOMINATOR = 10_000n;
@@ -55,10 +61,38 @@ export class PositionManager {
   private markPrice: bigint | null = null;
   readonly maintenanceMarginBps: bigint;
   readonly maxLeverage: number;
+  readonly liquidationPenaltyBps: bigint;
+  /** 保险基金余额：来源是强平罚金与外部注资，专门兜底强平穿仓缺口 */
+  insuranceFund = 0n;
+  /** 历史上由保险基金实际兜底的累计金额 */
+  totalInsuranceCovered = 0n;
+  /** 保险基金也不够兜底时留下的累计坏账（需要协议收入/后续注资偿还） */
+  totalBadDebt = 0n;
 
-  constructor(opts: { maintenanceMarginBps?: number; maxLeverage?: number } = {}) {
+  constructor(opts: { maintenanceMarginBps?: number; maxLeverage?: number; liquidationPenaltyBps?: number } = {}) {
     this.maintenanceMarginBps = BigInt(opts.maintenanceMarginBps ?? 500); // 默认 5%
     this.maxLeverage = opts.maxLeverage ?? 20;
+    this.liquidationPenaltyBps = BigInt(opts.liquidationPenaltyBps ?? 50); // 默认名义价值的 0.5%
+  }
+
+  /** 向保险基金注资（运营方/协议收入注入，金额为保证金代币最小单位） */
+  fundInsurance(amount: bigint): void {
+    if (amount <= 0n) throw new Error("insurance funding amount must be > 0");
+    this.insuranceFund += amount;
+  }
+
+  getInsuranceState() {
+    return {
+      insuranceFund: this.insuranceFund,
+      totalInsuranceCovered: this.totalInsuranceCovered,
+      totalBadDebt: this.totalBadDebt,
+    };
+  }
+
+  restoreInsuranceState(state: { insuranceFund: bigint; totalInsuranceCovered: bigint; totalBadDebt: bigint }): void {
+    this.insuranceFund = state.insuranceFund;
+    this.totalInsuranceCovered = state.totalInsuranceCovered;
+    this.totalBadDebt = state.totalBadDebt;
   }
 
   setMarkPrice(price: bigint): void {
@@ -187,19 +221,47 @@ export class PositionManager {
     return [...this.positions.keys()].map((id) => this.snapshot(id)).filter((s) => s.liquidatable);
   }
 
-  /** 以当前标记价强平：结算盈亏、退回多余保证金、记录穿仓缺口，并清空仓位 */
+  /** 以当前标记价强平：结算盈亏、罚金计入保险基金、穿仓缺口由保险基金兜底 */
   liquidate(traderId: string): LiquidationRecord | null {
     const snap = this.snapshot(traderId);
     if (snap.sizeSigned === 0n) return null;
     const pos = this.getPosition(traderId);
+    const absSize = snap.sizeSigned > 0n ? snap.sizeSigned : -snap.sizeSigned;
+    const notionalAtMark = absSize * snap.markPrice;
+
+    let returnedMargin = 0n;
+    let penalty = 0n;
+    let deficit = 0n;
+    let insuranceCovered = 0n;
+    let badDebt = 0n;
+
+    if (snap.equity > 0n) {
+      // 还有剩余权益：按名义价值收强平罚金（封顶为剩余权益），其余退回
+      penalty = (notionalAtMark * this.liquidationPenaltyBps) / BPS_DENOMINATOR;
+      if (penalty > snap.equity) penalty = snap.equity;
+      returnedMargin = snap.equity - penalty;
+      this.insuranceFund += penalty;
+    } else if (snap.equity < 0n) {
+      // 穿仓：缺口先由保险基金兜底，不够的部分记坏账，绝不向用户追偿到负余额
+      deficit = -snap.equity;
+      insuranceCovered = deficit < this.insuranceFund ? deficit : this.insuranceFund;
+      this.insuranceFund -= insuranceCovered;
+      this.totalInsuranceCovered += insuranceCovered;
+      badDebt = deficit - insuranceCovered;
+      this.totalBadDebt += badDebt;
+    }
+
     const record: LiquidationRecord = {
       traderId,
       sizeSigned: snap.sizeSigned,
       entryPrice: snap.entryPrice,
       liquidationPrice: snap.markPrice,
       pnl: snap.unrealizedPnl,
-      returnedMargin: snap.equity > 0n ? snap.equity : 0n,
-      deficit: snap.equity < 0n ? -snap.equity : 0n,
+      returnedMargin,
+      deficit,
+      insuranceCovered,
+      badDebt,
+      penalty,
     };
     pos.realizedPnl += snap.unrealizedPnl;
     pos.sizeSigned = 0n;
