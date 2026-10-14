@@ -43,7 +43,32 @@ CREATE TABLE IF NOT EXISTS sessions (
   token TEXT NOT NULL,
   createdAt INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS positions (
+  traderId TEXT PRIMARY KEY,
+  sizeSigned TEXT NOT NULL,
+  entryPrice TEXT NOT NULL,
+  marginAllocated TEXT NOT NULL,
+  leverage INTEGER NOT NULL,
+  realizedPnl TEXT NOT NULL,
+  updatedAt INTEGER NOT NULL
+);
 `);
+
+/** 仓位落库（永续仓位引擎的状态，重启后恢复未平仓位而不是从零开始） */
+export function persistPosition(serialized) {
+  db.prepare(
+    `INSERT INTO positions (traderId, sizeSigned, entryPrice, marginAllocated, leverage, realizedPnl, updatedAt)
+     VALUES (@traderId, @sizeSigned, @entryPrice, @marginAllocated, @leverage, @realizedPnl, @updatedAt)
+     ON CONFLICT(traderId) DO UPDATE SET sizeSigned=excluded.sizeSigned, entryPrice=excluded.entryPrice,
+       marginAllocated=excluded.marginAllocated, leverage=excluded.leverage,
+       realizedPnl=excluded.realizedPnl, updatedAt=excluded.updatedAt`
+  ).run({ ...serialized, updatedAt: Date.now() });
+}
+
+export function loadPositions() {
+  return db.prepare(`SELECT * FROM positions WHERE sizeSigned != '0'`).all();
+}
 
 /** 登录会话落库：进程重启（免费层休眠唤醒/重新部署）后用户不用重新签名登录 */
 export function persistSession(address, token) {
@@ -68,10 +93,13 @@ const orderColumns = db.prepare(`PRAGMA table_info(orders)`).all().map((c) => c.
 if (!orderColumns.includes("authorization")) {
   db.exec(`ALTER TABLE orders ADD COLUMN authorization TEXT`);
 }
+if (!orderColumns.includes("leverage")) {
+  db.exec(`ALTER TABLE orders ADD COLUMN leverage INTEGER NOT NULL DEFAULT 1`);
+}
 
 const upsertOrderStmt = db.prepare(`
-  INSERT INTO orders (id, traderId, side, type, price, quantity, remaining, tif, status, timestamp, createdAt, authorization)
-  VALUES (@id, @traderId, @side, @type, @price, @quantity, @remaining, @tif, @status, @timestamp, @createdAt, @authorization)
+  INSERT INTO orders (id, traderId, side, type, price, quantity, remaining, tif, status, timestamp, createdAt, authorization, leverage)
+  VALUES (@id, @traderId, @side, @type, @price, @quantity, @remaining, @tif, @status, @timestamp, @createdAt, @authorization, @leverage)
   ON CONFLICT(id) DO UPDATE SET remaining=excluded.remaining, status=excluded.status,
     authorization=COALESCE(excluded.authorization, orders.authorization)
 `);
@@ -95,6 +123,7 @@ export function persistOrderState(order, authorization = null) {
     timestamp: order.timestamp,
     createdAt: Date.now(),
     authorization: authorization ? JSON.stringify(authorization) : null,
+    leverage: Number.isInteger(order.leverage) ? order.leverage : 1,
   });
 }
 

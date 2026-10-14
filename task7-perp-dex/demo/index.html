@@ -75,6 +75,11 @@
     <label>数量</label><input id="quantity" placeholder="例如 5" inputmode="numeric" />
     <label>TIF</label>
     <select id="tif"><option value="GTC">GTC</option><option value="IOC">IOC</option><option value="FOK">FOK</option></select>
+    <label>杠杆</label>
+    <select id="leverage">
+      <option value="1">1x</option><option value="2">2x</option><option value="3">3x</option>
+      <option value="5" selected>5x</option><option value="10">10x</option><option value="20">20x</option>
+    </select>
     <button id="placeOrderBtn" disabled>下单</button>
     <div class="hint">买单成交后将按成交金额从买方 Vault 余额结算给卖方；下买单时钱包会要求签署一份仅限定金额与有效期的结算授权（EIP-712），operator 只能在该授权范围内结算。</div>
   </div>
@@ -93,6 +98,15 @@
       <thead><tr><th>订单</th><th>方向</th><th>价格</th><th>剩余 / 总量</th><th>状态</th><th></th></tr></thead>
       <tbody id="myOrdersBody"><tr><td colspan="6" style="text-align:left;color:#9aa4af;">连接钱包后显示</td></tr></tbody>
     </table>
+  </div>
+
+  <div class="card full">
+    <h3>我的仓位</h3>
+    <table>
+      <thead><tr><th>方向</th><th>数量</th><th>入场价</th><th>标记价</th><th>未实现盈亏</th><th>占用保证金</th><th>强平价</th><th></th></tr></thead>
+      <tbody id="positionBody"><tr><td colspan="8" style="text-align:left;color:#9aa4af;">暂无仓位</td></tr></tbody>
+    </table>
+    <div class="hint">仓位保证金来自综合保证金（Vault mUSDC 余额 + RWA 抵押估值）；标记价取最新成交价，权益跌破维持保证金（5%）将触发强平。</div>
   </div>
 
   <div class="card full">
@@ -248,7 +262,7 @@ document.getElementById('connectBtn').onclick = async () => {
     document.getElementById('depositBtn').disabled = false;
 
     await refreshBalance();
-    await Promise.all([refreshMyOrders(), refreshTrades()]);
+    await Promise.all([refreshMyOrders(), refreshTrades(), refreshPosition()]);
     connectWs();
   } catch (e) { log('连接失败: ' + e.message); }
   finally { btn.disabled = false; }
@@ -321,6 +335,8 @@ function connectWs() {
     if (type === 'snapshot' || type === 'orderbook') renderBook(payload);
     if (type === 'trades') { renderTrades(payload, true); log('成交: ' + JSON.stringify(payload)); }
     if (type === 'order_update') { log('我的订单更新: ' + JSON.stringify(payload)); refreshMyOrders(); }
+    if (type === 'position_update') renderPosition(payload);
+    if (type === 'liquidated') { log('⚠️ 仓位已被强平: ' + JSON.stringify(payload)); refreshPosition(); refreshBalance(); }
     if (type === 'settled') { log('链上结算完成，tx: ' + payload.txHash, payload.txHash); refreshBalance(); }
     if (type === 'settlement_failed') {
       log('链上结算失败（成交已在链下撮合，但未上链）: ' + payload.error +
@@ -406,6 +422,68 @@ async function refreshMyOrders() {
   } catch {}
 }
 
+function renderPosition(p) {
+  const body = document.getElementById('positionBody');
+  if (!p || p.sizeSigned === '0') {
+    body.innerHTML = '<tr><td colspan="8" style="text-align:left;color:#9aa4af;">暂无仓位</td></tr>';
+    return;
+  }
+  const isLong = BigInt(p.sizeSigned) > 0n;
+  const absSize = isLong ? p.sizeSigned : String(-BigInt(p.sizeSigned));
+  const pnl = BigInt(p.unrealizedPnl);
+  const tr = document.createElement('tr');
+  tr.innerHTML =
+    `<td class="${isLong ? 'bid' : 'ask'}">${isLong ? '多 Long' : '空 Short'}</td>` +
+    `<td>${absSize}</td><td>${p.entryPrice}</td><td>${p.markPrice}</td>` +
+    `<td style="color:${pnl >= 0n ? '#2ecc71' : '#E84142'};">${p.unrealizedPnl}</td>` +
+    `<td>${p.marginAllocated}</td><td>${p.liquidationPrice ?? '-'}</td>`;
+  const td = document.createElement('td');
+  const btn = document.createElement('button');
+  btn.className = 'secondary small';
+  btn.textContent = '市价平仓';
+  btn.onclick = () => closePosition(p, btn);
+  td.appendChild(btn);
+  tr.appendChild(td);
+  body.innerHTML = '';
+  body.appendChild(tr);
+}
+
+async function refreshPosition() {
+  if (!account) return;
+  try {
+    const res = await fetch(`${apiUrl}/positions/${account}`);
+    if (res.ok) renderPosition(await res.json());
+  } catch {}
+}
+
+/** 平仓 = 以当前标记价下反向限价单，数量为全部仓位 */
+async function closePosition(p, btn) {
+  try {
+    btn.disabled = true;
+    const isLong = BigInt(p.sizeSigned) > 0n;
+    const qty = isLong ? p.sizeSigned : String(-BigInt(p.sizeSigned));
+    const body = {
+      traderId: account,
+      side: isLong ? 'sell' : 'buy',
+      price: p.markPrice,
+      quantity: qty,
+      tif: 'IOC', type: 'limit', leverage: 1,
+    };
+    if (!isLong) {
+      const authorization = await buildBuyAuthorization(p.markPrice, qty);
+      if (authorization) body.authorization = authorization;
+    }
+    const res = await fetch(`${apiUrl}/orders`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    log('平仓单结果: ' + JSON.stringify(data));
+    await refreshPosition();
+  } catch (e) { log('平仓失败: ' + e.message); btn.disabled = false; }
+}
+
 async function cancelOrder(id, btn) {
   try {
     btn.disabled = true;
@@ -461,6 +539,7 @@ document.getElementById('placeOrderBtn').onclick = async () => {
       price,
       quantity,
       tif: document.getElementById('tif').value,
+      leverage: Number(document.getElementById('leverage').value),
       type: 'limit',
     };
     if (side === 'buy') {
@@ -475,6 +554,7 @@ document.getElementById('placeOrderBtn').onclick = async () => {
     log('下单结果: ' + JSON.stringify(data));
     await refreshBalance();
     await refreshMyOrders();
+    await refreshPosition();
   } catch (e) { log('下单失败: ' + e.message); }
   finally { btn.disabled = false; }
 };

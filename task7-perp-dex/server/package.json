@@ -8,7 +8,8 @@
     "marketmaker": "node src/marketMaker.js",
     "test:e2e": "node test-e2e.mjs",
     "test:robustness": "node test-robustness.mjs",
-    "test:margin": "node test-margin.mjs"
+    "test:margin": "node test-margin.mjs",
+    "test:positions": "node test-positions.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.5.0",

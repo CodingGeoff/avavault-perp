@@ -175,7 +175,9 @@ try {
   check("buy with no margin at all is rejected (403)", poorBuy.status === 403 && /insufficient margin/.test(poorBuy.data.error || ""));
 
   const poorSell = await placeOrder(POOR, "sell", "2600", "5");
-  check("sell orders are not margin-checked (settlement pays the seller)", poorSell.status === 200);
+  check("short open with no margin is also rejected (403)", poorSell.status === 403 && /insufficient margin/.test(poorSell.data.error || ""));
+  const richSell = await placeOrder(RICH, "sell", "2600", "5");
+  check("sell covered by RWA collateral is accepted", richSell.status === 200);
 } finally {
   if (server) {
     server.kill("SIGTERM");

@@ -5,7 +5,8 @@ import { createServer } from "node:http";
 import { ethers } from "ethers";
 import { randomBytes } from "node:crypto";
 import { OrderBook } from "../../matching-engine/dist/orderbook.js";
-import { persistOrderResult, persistOrderState, markTradeSettled, loadRecentTrades, loadOpenOrders, persistSession, loadSessions } from "./db.js";
+import { PositionManager } from "../../matching-engine/dist/positions.js";
+import { persistOrderResult, persistOrderState, markTradeSettled, loadRecentTrades, loadOpenOrders, persistSession, loadSessions, persistPosition, loadPositions } from "./db.js";
 import { MarginService, parsePriceToE6 } from "./margin.js";
 
 const PORT = process.env.PORT || 4000;
@@ -54,6 +55,8 @@ if (VAULT_ADDRESS && OPERATOR_PRIVATE_KEY) {
 
 /** 下单时买方提交的 EIP-712 签名授权，key 是这笔订单的 id，只在 v2 结算模式下使用。 */
 const orderAuthorizations = new Map();
+/** 每笔订单的杠杆倍数，key 是订单 id（仓位引擎记账时按订单取用） */
+const orderLeverages = new Map();
 
 // ---------------------------------------------------------------
 // 保证金聚合：把 MultiCollateralVaultV2.totalAccountValue()（RWA 抵押估值）
@@ -132,6 +135,7 @@ for (const row of loadOpenOrders()) {
     timestamp: row.timestamp,
     status: row.status,
   });
+  orderLeverages.set(row.id, Number(row.leverage) || 1);
   // 一并恢复这笔挂单的 EIP-712 结算授权（见 db.js 的 authorization 列），
   // 否则进程重启后挂在盘口上的买单被人吃掉时找不到授权、链上结算会静默失败。
   if (row.authorization) {
@@ -146,6 +150,72 @@ for (const row of loadOpenOrders()) {
 const recentTrades = loadRecentTrades(1);
 if (recentTrades.length) book.fastForwardTradeSeq(recentTrades[0].id);
 console.log(`[startup] restored ${restoredCount} open order(s) from SQLite`);
+
+// ---------------------------------------------------------------
+// 永续仓位引擎：成交记账为带杠杆的净仓位，负责保证金占用、浮盈亏与强平。
+// 资金仍在链上两个金库里（mUSDC Vault + RWA 抵押金库），这里的仓位保证金
+// 来源就是 margin.js 聚合出的综合保证金；仓位状态落库，重启恢复。
+// ---------------------------------------------------------------
+const positions = new PositionManager({
+  maintenanceMarginBps: Number(process.env.MAINTENANCE_MARGIN_BPS || 500),
+});
+for (const row of loadPositions()) {
+  positions.restore({
+    traderId: row.traderId,
+    sizeSigned: row.sizeSigned,
+    entryPrice: row.entryPrice,
+    marginAllocated: row.marginAllocated,
+    leverage: row.leverage,
+    realizedPnl: row.realizedPnl,
+  });
+}
+if (recentTrades.length) positions.setMarkPrice(BigInt(recentTrades[0].price));
+console.log(`[startup] restored ${loadPositions().length} open position(s) from SQLite`);
+
+function serializePositionSnapshot(s) {
+  return {
+    traderId: s.traderId,
+    sizeSigned: s.sizeSigned.toString(),
+    entryPrice: s.entryPrice.toString(),
+    marginAllocated: s.marginAllocated.toString(),
+    leverage: s.leverage,
+    realizedPnl: s.realizedPnl.toString(),
+    markPrice: s.markPrice.toString(),
+    unrealizedPnl: s.unrealizedPnl.toString(),
+    equity: s.equity.toString(),
+    maintenanceMargin: s.maintenanceMargin.toString(),
+    liquidationPrice: s.liquidationPrice === null ? null : s.liquidationPrice.toString(),
+    liquidatable: s.liquidatable,
+  };
+}
+
+function persistSnapshot(s) {
+  persistPosition(PositionManager.serialize(s));
+}
+
+/** 标记价变动后全局扫描并执行强平，返回强平记录（已序列化） */
+function runLiquidations() {
+  const records = [];
+  for (const snap of positions.checkLiquidations()) {
+    const rec = positions.liquidate(snap.traderId);
+    if (!rec) continue;
+    persistSnapshot(positions.snapshot(snap.traderId));
+    const serialized = {
+      traderId: rec.traderId,
+      sizeSigned: rec.sizeSigned.toString(),
+      entryPrice: rec.entryPrice.toString(),
+      liquidationPrice: rec.liquidationPrice.toString(),
+      pnl: rec.pnl.toString(),
+      returnedMargin: rec.returnedMargin.toString(),
+      deficit: rec.deficit.toString(),
+    };
+    records.push(serialized);
+    pushPrivate(rec.traderId, "liquidated", serialized);
+    console.log(`[liquidation] ${rec.traderId} liquidated at ${rec.liquidationPrice}, pnl=${rec.pnl}, deficit=${rec.deficit}`);
+  }
+  if (records.length) broadcastPublic("liquidations", records);
+  return records;
+}
 
 // 会话存储：地址 -> {token, createdAt}，token 反查地址的索引，以及落库恢复。
 // 以前只存内存：进程一重启所有人都要重新签名登录；且 WebSocket 私有频道只凭
@@ -316,28 +386,61 @@ app.get("/account/:address/margin", async (req, res) => {
   });
 });
 
+/** 单个交易者的仓位（含标记价下的浮盈亏、权益、强平价） */
+app.get("/positions/:address", (req, res) => {
+  if (!ethers.isAddress(req.params.address)) {
+    return res.status(400).json({ error: "invalid address" });
+  }
+  res.json(serializePositionSnapshot(positions.snapshot(req.params.address)));
+});
+
+/** 全部未平仓位 */
+app.get("/positions", (_req, res) => {
+  res.json(positions.allSnapshots().map(serializePositionSnapshot));
+});
+
+/** 任何人可触发的强平检查（真实系统里这一步由清算人抢跑，这里开放触发） */
+app.post("/positions/check-liquidations", (_req, res) => {
+  res.json({ liquidated: runLiquidations() });
+});
+
 app.post("/orders", async (req, res) => {
   try {
     const { traderId, side, price, quantity, type, tif, authorization } = req.body;
     if (!sessions.has(String(traderId).toLowerCase())) {
       return res.status(401).json({ error: "please /auth/login first" });
     }
-    // 保证金校验（可选开启）：结算时买方是付款方，所以买单撮合前先确认
-    // "Vault mUSDC 余额 + RWA 抵押估值"覆盖成交所需金额，避免撮合出一笔
-    // 必然链上结算失败（InsufficientBalance）的成交。市价买单没有确定价格，
-    // 无法事先算出所需金额，本原型只对限价买单做这项校验。
-    if (MARGIN_ENFORCE && side === "buy" && (type || "limit") === "limit") {
-      const required = toBigIntSafe(price) * toBigIntSafe(quantity);
-      const check = await marginService.checkSufficient(traderId, required);
-      if (check.sourceErrors.length) {
-        return res.status(503).json({ error: `margin check unavailable: ${check.sourceErrors.join("; ")}` });
-      }
-      if (!check.sufficient) {
-        return res.status(403).json({
-          error:
-            `insufficient margin: required ${required.toString()}, available ${check.effectiveMargin.toString()} ` +
-            `(vault ${check.vaultBalance.toString()} + RWA collateral ${check.rwaMarginValue === null ? "not counted" : check.rwaMarginValue.toString()})`,
-        });
+    const leverage = req.body.leverage === undefined ? 1 : Number(req.body.leverage);
+    if (!Number.isInteger(leverage) || leverage < 1 || leverage > positions.maxLeverage) {
+      return res.status(400).json({ error: `leverage must be an integer in [1, ${positions.maxLeverage}]` });
+    }
+    // 仓位保证金校验（可选开启）：新增敞口需要的保证金 = 新增名义价值 / 杠杆，
+    // 可用额度 = 综合保证金（Vault mUSDC + 已计入的 RWA 抵押估值）- 已被未平
+    // 仓位占用的部分。纯平仓方向不新增占用、不需要保证金。市价单价格不确定，
+    // 本原型只对限价单做这项校验。
+    if (MARGIN_ENFORCE && (type || "limit") === "limit") {
+      const qty = toBigIntSafe(quantity);
+      const notionalPrice = toBigIntSafe(price);
+      const current = positions.getPosition(traderId);
+      const absSize = current.sizeSigned > 0n ? current.sizeSigned : -current.sizeSigned;
+      const isReducing =
+        current.sizeSigned !== 0n && (side === "sell") === (current.sizeSigned > 0n);
+      const addQty = isReducing ? (qty > absSize ? qty - absSize : 0n) : qty;
+      const requiredMargin = (addQty * notionalPrice + BigInt(leverage) - 1n) / BigInt(leverage);
+      if (requiredMargin > 0n) {
+        const margin = await marginService.getMargin(traderId);
+        if (margin.sourceErrors.length) {
+          return res.status(503).json({ error: `margin check unavailable: ${margin.sourceErrors.join("; ")}` });
+        }
+        const available = margin.effectiveMargin - positions.reservedMargin(traderId);
+        if (available < requiredMargin) {
+          return res.status(403).json({
+            error:
+              `insufficient margin for ${leverage}x position: required ${requiredMargin.toString()}, available ${available.toString()} ` +
+              `(effective ${margin.effectiveMargin.toString()} = vault ${margin.vaultBalance.toString()} + RWA collateral ` +
+              `${margin.rwaMarginValue === null ? "not counted" : margin.rwaMarginValue.toString()}, reserved ${positions.reservedMargin(traderId).toString()})`,
+          });
+        }
       }
     }
     // v2 结算模式下，买单必须携带买方自己签署的 EIP-712 授权（对应 VaultV2.settleWithAuthorization），
@@ -358,6 +461,8 @@ app.post("/orders", async (req, res) => {
     if (price !== undefined && price !== null) input.price = toBigIntSafe(price);
 
     const { order, trades } = book.placeOrder(input);
+    order.leverage = leverage;
+    orderLeverages.set(order.id, leverage);
     if (authorization) {
       orderAuthorizations.set(order.id, { ...authorization, from: traderId });
     }
@@ -374,6 +479,26 @@ app.post("/orders", async (req, res) => {
     broadcastPublic("orderbook", serializeSnapshot(book.getSnapshot(20)));
     if (trades.length) broadcastPublic("trades", trades.map(serializeTrade));
     pushPrivate(traderId, "order_update", serializeOrder(order));
+
+    // 成交记入仓位引擎：更新双方净仓位/保证金占用，标记价随最新成交移动，
+    // 然后全局扫描强平（标记价移动可能危及不相关的第三方仓位）。
+    if (trades.length) {
+      for (const t of trades) {
+        const { buyer, seller } = positions.applyTrade({
+          buyTraderId: t.buyTraderId,
+          sellTraderId: t.sellTraderId,
+          price: t.price,
+          quantity: t.quantity,
+          buyLeverage: orderLeverages.get(t.buyOrderId) ?? 1,
+          sellLeverage: orderLeverages.get(t.sellOrderId) ?? 1,
+        });
+        persistSnapshot(buyer);
+        persistSnapshot(seller);
+        pushPrivate(t.buyTraderId, "position_update", serializePositionSnapshot(buyer));
+        pushPrivate(t.sellTraderId, "position_update", serializePositionSnapshot(seller));
+      }
+      runLiquidations();
+    }
 
     // 可选：把撮合出的成交实时结算到链上 Vault（需要配置 VAULT_ADDRESS + OPERATOR_PRIVATE_KEY）
     if (vaultContract && trades.length) {

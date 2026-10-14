@@ -231,7 +231,25 @@ RWA 抵押品经 TWAP 折价后的估值，与本系统 Vault 的 mUSDC 余额�
 `test-robustness.mjs` 与撮合引擎 21 个用例回归不受影响。边界：这是服务层的
 购买力校验，仓位系统（杠杆/强平）仍未实现，估值尚未在合约层绑定为仓位保证金。
 
-### 3.5 会话与私有推送加固
+### 3.5 永续仓位引擎（仓位 / 杠杆 / 强平）
+
+`matching-engine/src/positions.ts` 把订单簿成交记账为带杠杆的净仓位：多空净额、
+VWAP 入场价、初始保证金 = 名义价值 / 杠杆逐笔占用、平仓按比例释放并结算已实现
+盈亏、反手先平后开。标记价取最新成交价；权益（占用保证金 + 未实现盈亏）跌破
+维持保证金（默认 5%，`MAINTENANCE_MARGIN_BPS` 可配）时自动以标记价强平，退回
+多余保证金、穿仓部分单独记为缺口。服务端在每笔成交后更新双方仓位、落库
+（重启恢复未平仓位）、私推 `position_update`，标记价移动引发的第三方仓位风险
+也会被全局扫描强平。接口：`GET /positions/:address`、`GET /positions`、
+`POST /positions/check-liquidations`；下单可带 `leverage`（1–20）。开启
+`MARGIN_ENFORCE` 时新敞口的保证金来自 3.4 的综合保证金（Vault mUSDC + RWA
+抵押估值）扣掉已占用部分，平仓方向不要求新保证金——即 RWA 估值在服务层正式
+成为仓位保证金来源。前端同步提供杠杆选择、仓位面板（浮盈亏/强平价）与一键平仓。
+验证：`matching-engine/test/positions.test.ts`（10 项）与
+`server/test-positions.mjs`（10 项，含崩盘强平与重启恢复）。边界：资金费率、
+以预言机（而非最新成交价）为标记价、穿仓缺口的保险基金结算仍未实现；强平
+盈亏目前记在仓位账上，链上净额结算沿用既有成交结算通道。
+
+### 3.6 会话与私有推送加固
 
 登录（`POST /auth/login`）现在返回随机 `sessionToken`：WebSocket 私有频道
 （`order_update` / `settled`）只对携带有效 token 的连接按地址推送，只靠查询参数
