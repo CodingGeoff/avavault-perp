@@ -39,14 +39,28 @@ CREATE TABLE IF NOT EXISTS trades (
 );
 `);
 
+// 迁移：老库的 orders 表没有 authorization 列。v2 结算模式下买单携带的 EIP-712
+// 授权以前只存在服务端内存里，进程一重启（如免费层休眠唤醒/重新部署）就丢失，
+// 挂在盘口上的买单成交后将无法链上结算。这里把授权随订单一起落库，重启恢复
+// 订单簿时一并恢复授权。已经部署过的老数据库靠下面这段幂等迁移补列，不需要删库。
+const orderColumns = db.prepare(`PRAGMA table_info(orders)`).all().map((c) => c.name);
+if (!orderColumns.includes("authorization")) {
+  db.exec(`ALTER TABLE orders ADD COLUMN authorization TEXT`);
+}
+
 const upsertOrderStmt = db.prepare(`
-  INSERT INTO orders (id, traderId, side, type, price, quantity, remaining, tif, status, timestamp, createdAt)
-  VALUES (@id, @traderId, @side, @type, @price, @quantity, @remaining, @tif, @status, @timestamp, @createdAt)
-  ON CONFLICT(id) DO UPDATE SET remaining=excluded.remaining, status=excluded.status
+  INSERT INTO orders (id, traderId, side, type, price, quantity, remaining, tif, status, timestamp, createdAt, authorization)
+  VALUES (@id, @traderId, @side, @type, @price, @quantity, @remaining, @tif, @status, @timestamp, @createdAt, @authorization)
+  ON CONFLICT(id) DO UPDATE SET remaining=excluded.remaining, status=excluded.status,
+    authorization=COALESCE(excluded.authorization, orders.authorization)
 `);
 
-/** 只更新/插入一个订单的最新状态（用于持久化因撮合而被动变化的 maker 挂单） */
-export function persistOrderState(order) {
+/**
+ * 只更新/插入一个订单的最新状态（用于持久化因撮合而被动变化的 maker 挂单）。
+ * `authorization` 只在订单刚下达时由调用方传入；之后 maker 状态被动变化时不传，
+ * 靠上面 COALESCE 保留已存的授权，避免把已落库的签名抹掉。
+ */
+export function persistOrderState(order, authorization = null) {
   upsertOrderStmt.run({
     id: order.id,
     traderId: order.traderId,
@@ -59,6 +73,7 @@ export function persistOrderState(order) {
     status: order.status,
     timestamp: order.timestamp,
     createdAt: Date.now(),
+    authorization: authorization ? JSON.stringify(authorization) : null,
   });
 }
 
@@ -69,8 +84,8 @@ export function persistOrderState(order) {
  * `persistOrderState()` 把这些 maker 订单的最新状态也落库，否则重启后会读到
  * "看起来还挂着、实际上早就被吃掉"的过期数据。
  */
-export function persistOrderResult(order, trades) {
-  persistOrderState(order);
+export function persistOrderResult(order, trades, authorization = null) {
+  persistOrderState(order, authorization);
 
   const insertTrade = db.prepare(`
     INSERT OR IGNORE INTO trades (id, price, quantity, buyOrderId, sellOrderId, buyTraderId, sellTraderId, timestamp)

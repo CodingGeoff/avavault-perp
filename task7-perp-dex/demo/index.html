@@ -18,20 +18,29 @@
   label{font-size:12px;color:var(--muted);display:block;margin-top:10px;}
   button{background:var(--red);color:#fff;border:none;padding:9px 14px;border-radius:10px;font-weight:600;cursor:pointer;font-size:13px;margin-top:10px;}
   button.secondary{background:#2c3138;}
+  button:disabled{opacity:.45;cursor:not-allowed;}
+  button.small{padding:4px 10px;margin-top:0;font-size:12px;}
   table{width:100%;border-collapse:collapse;font-size:13px;}
   th,td{padding:5px 8px;text-align:right;border-bottom:1px solid #23272c;}
   th:first-child,td:first-child{text-align:left;}
   .bid{color:var(--green);} .ask{color:var(--red);}
-  .log{white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:#0f1114;padding:10px;border-radius:10px;max-height:260px;overflow:auto;}
+  .log{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:#0f1114;padding:10px;border-radius:10px;max-height:260px;overflow:auto;}
+  .log div{padding:2px 0;border-bottom:1px solid #1a1e23;white-space:pre-wrap;word-break:break-all;}
+  .log a{color:var(--red);}
   .pill{font-size:11px;padding:2px 8px;border-radius:999px;background:#23272c;}
-  .row{display:flex;justify-content:space-between;padding:4px 0;font-size:13px;}
+  .pill.ok{background:#14532d;color:#bbf7d0;}
+  .pill.busy{background:#713f12;color:#fde68a;}
+  .row{display:flex;justify-content:space-between;padding:4px 0;font-size:13px;gap:8px;}
+  .hint{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5;}
+  .hint a{color:var(--red);}
+  .addr{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;word-break:break-all;text-align:right;}
 </style>
 </head>
 <body>
 <header>
   <h1>AvaVault <span>Perp</span> — 链上永续合约 Demo</h1>
   <div>
-    <span id="apiStatus" class="pill">API: 未连接</span>
+    <span id="apiStatus" class="pill busy">API: 检测中…</span>
     <button id="connectBtn">连接钱包并登录</button>
   </div>
 </header>
@@ -45,21 +54,27 @@
 <main>
   <div class="card">
     <h3>账户</h3>
-    <div class="row"><span class="muted">地址</span><span id="account">未连接</span></div>
+    <div class="row"><span class="muted">地址</span><span id="account" class="addr">未连接</span></div>
     <div class="row"><span class="muted">链上 Vault 保证金余额</span><span id="vaultBalance">-</span></div>
     <label>API 地址</label>
     <input id="apiUrl" value="https://avavault-perp-dex-api.onrender.com" />
+    <button id="depositBtn" class="secondary" disabled>领取 1,000 mUSDC 并存入保证金</button>
+    <div class="hint">
+      存入后成交才能完成链上结算（结算从买方 Vault 余额中扣款）。存入需要支付少量 Fuji 测试网
+      AVAX 作为 gas，可在 <a href="https://faucet.avax.network/" target="_blank">Avalanche Faucet</a> 领取。
+    </div>
   </div>
 
   <div class="card">
     <h3>下单</h3>
     <label>方向</label>
     <select id="side"><option value="buy">买 Buy</option><option value="sell">卖 Sell</option></select>
-    <label>价格</label><input id="price" placeholder="例如 2500" />
-    <label>数量</label><input id="quantity" placeholder="例如 5" />
+    <label>价格</label><input id="price" placeholder="例如 2500" inputmode="numeric" />
+    <label>数量</label><input id="quantity" placeholder="例如 5" inputmode="numeric" />
     <label>TIF</label>
     <select id="tif"><option value="GTC">GTC</option><option value="IOC">IOC</option><option value="FOK">FOK</option></select>
-    <button id="placeOrderBtn">下单</button>
+    <button id="placeOrderBtn" disabled>下单</button>
+    <div class="hint">买单成交后将按成交金额从买方 Vault 余额结算给卖方；下买单时钱包会要求签署一份仅限定金额与有效期的结算授权（EIP-712），operator 只能在该授权范围内结算。</div>
   </div>
 
   <div class="card full">
@@ -71,25 +86,137 @@
   </div>
 
   <div class="card full">
+    <h3>我的挂单</h3>
+    <table>
+      <thead><tr><th>订单</th><th>方向</th><th>价格</th><th>剩余 / 总量</th><th>状态</th><th></th></tr></thead>
+      <tbody id="myOrdersBody"><tr><td colspan="6" style="text-align:left;color:#9aa4af;">连接钱包后显示</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card full">
+    <h3>最近成交</h3>
+    <table>
+      <thead><tr><th>成交</th><th>价格</th><th>数量</th><th>买方</th><th>卖方</th><th>链上结算</th></tr></thead>
+      <tbody id="tradesBody"><tr><td colspan="6" style="text-align:left;color:#9aa4af;">暂无成交</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card full">
     <h3>日志 / 成交回报</h3>
-    <div class="log" id="log">等待连接...</div>
+    <div class="log" id="log"><div>等待连接...</div></div>
   </div>
 </main>
 
 <script>
 const { ethers } = window;
-let signer, account, apiUrl;
-let ws;
 
-function log(msg) {
+// Avalanche Fuji 测试网（Vault 与结算合约所在网络）
+const FUJI_CHAIN_ID = '0xa869'; // 43113
+const FUJI_PARAMS = {
+  chainId: FUJI_CHAIN_ID,
+  chainName: 'Avalanche Fuji Testnet',
+  nativeCurrency: { name: 'Avalanche', symbol: 'AVAX', decimals: 18 },
+  rpcUrls: ['https://api.avax-test.network/ext/bc/C/rpc'],
+  blockExplorerUrls: ['https://testnet.snowtrace.io'],
+};
+const SNOWTRACE = 'https://testnet.snowtrace.io';
+// Fuji 上已部署的演示合约（mUSDC 可公开领取，Vault 为签名授权结算的 V2 版本）
+const MOCK_USDC = '0x206d1B4D35c1f081C82939F1d97A05B5cb5BEF93';
+const VAULT_V2 = '0x0425352bc3c5293D5629c27525969439Ab9C27b5';
+const ERC20_ABI = [
+  'function faucet(uint256 amount) external',
+  'function approve(address spender, uint256 amount) external returns (bool)',
+];
+const VAULT_ABI = ['function deposit(uint256 amount) external'];
+
+let signer, account, apiUrl, ws, settlementDomainCache;
+
+function shortAddr(a) { return a ? a.slice(0, 6) + '…' + a.slice(-4) : ''; }
+
+function log(msg, txHash) {
   const el = document.getElementById('log');
-  el.textContent = `[${new Date().toLocaleTimeString()}] ${msg}\n` + el.textContent;
+  const row = document.createElement('div');
+  row.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  if (txHash) {
+    row.appendChild(document.createTextNode(' '));
+    const a = document.createElement('a');
+    a.href = `${SNOWTRACE}/tx/${txHash}`;
+    a.target = '_blank';
+    a.textContent = '在 Snowtrace 查看';
+    row.appendChild(a);
+  }
+  el.prepend(row);
+}
+
+function setApiStatus(text, cls) {
+  const el = document.getElementById('apiStatus');
+  el.textContent = text;
+  el.className = 'pill' + (cls ? ' ' + cls : '');
+}
+
+function readApiUrl() {
+  return document.getElementById('apiUrl').value.trim().replace(/\/+$/, '');
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try { return await fetch(url, { ...options, signal: ctrl.signal }); }
+  finally { clearTimeout(timer); }
+}
+
+async function parseError(res) {
+  try {
+    const data = await res.json();
+    return data.error || JSON.stringify(data);
+  } catch { return `HTTP ${res.status}`; }
+}
+
+/**
+ * 检测后端是否可用。免费层实例休眠后第一次请求需要等待其唤醒，
+ * 因此这里用较长的单次超时并自动重试，而不是第一次失败就报错。
+ */
+async function checkApiHealth(attempts = 3) {
+  apiUrl = readApiUrl();
+  setApiStatus('API: 正在唤醒…', 'busy');
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      const res = await fetchWithTimeout(`${apiUrl}/health`, {}, 60000);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setApiStatus(data.settlementEnabled ? 'API: 已就绪（链上结算已开启）' : 'API: 已就绪', 'ok');
+      return data;
+    } catch (e) {
+      if (i < attempts) setApiStatus(`API: 唤醒中，第 ${i + 1} 次重试…`, 'busy');
+    }
+  }
+  setApiStatus('API: 未连接', '');
+  return null;
+}
+
+async function ensureFujiNetwork() {
+  const current = await window.ethereum.request({ method: 'eth_chainId' });
+  if (current && current.toLowerCase() === FUJI_CHAIN_ID) return;
+  try {
+    await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: FUJI_CHAIN_ID }] });
+  } catch (e) {
+    if (e && e.code === 4902) {
+      await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [FUJI_PARAMS] });
+    } else {
+      throw new Error('请在钱包中切换到 Avalanche Fuji 测试网（Chain ID 43113）后重试');
+    }
+  }
 }
 
 document.getElementById('connectBtn').onclick = async () => {
+  const btn = document.getElementById('connectBtn');
   try {
-    apiUrl = document.getElementById('apiUrl').value.trim();
+    btn.disabled = true;
     if (!window.ethereum) { alert('请安装 MetaMask/Core'); return; }
+    const health = await checkApiHealth();
+    if (!health) { log('后端 API 未能唤醒，请稍后重试，或检查 API 地址是否正确'); return; }
+
+    await ensureFujiNetwork();
     const provider = new ethers.BrowserProvider(window.ethereum);
     await provider.send('eth_requestAccounts', []);
     signer = await provider.getSigner();
@@ -103,13 +230,17 @@ document.getElementById('connectBtn').onclick = async () => {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ address: account, message, signature }),
     });
-    if (!res.ok) throw new Error(await res.text());
-    document.getElementById('apiStatus').textContent = 'API: 已登录';
+    if (!res.ok) throw new Error(await parseError(res));
+    setApiStatus('API: 已登录', 'ok');
     log('登录成功: ' + account);
+    document.getElementById('placeOrderBtn').disabled = false;
+    document.getElementById('depositBtn').disabled = false;
 
     await refreshBalance();
+    await Promise.all([refreshMyOrders(), refreshTrades()]);
     connectWs();
   } catch (e) { log('连接失败: ' + e.message); }
+  finally { btn.disabled = false; }
 };
 
 async function refreshBalance() {
@@ -122,15 +253,53 @@ async function refreshBalance() {
   } catch (e) { log('查询余额失败: ' + e.message); }
 }
 
+document.getElementById('depositBtn').onclick = async () => {
+  const btn = document.getElementById('depositBtn');
+  try {
+    btn.disabled = true;
+    await ensureFujiNetwork();
+    const amount = 1000n * 10n ** 6n; // 1,000 mUSDC（6 位小数）
+    const usdc = new ethers.Contract(MOCK_USDC, ERC20_ABI, signer);
+    const vault = new ethers.Contract(VAULT_V2, VAULT_ABI, signer);
+
+    log('正在领取测试 mUSDC…（请在钱包确认）');
+    const faucetTx = await usdc.faucet(amount);
+    await faucetTx.wait();
+    log('已领取 1,000 mUSDC', faucetTx.hash);
+
+    log('正在授权 Vault 使用 mUSDC…（请在钱包确认）');
+    const approveTx = await usdc.approve(VAULT_V2, amount);
+    await approveTx.wait();
+    log('授权完成', approveTx.hash);
+
+    log('正在存入 Vault 作为保证金…（请在钱包确认）');
+    const depositTx = await vault.deposit(amount);
+    await depositTx.wait();
+    log('保证金存入完成', depositTx.hash);
+    await refreshBalance();
+  } catch (e) {
+    log('存入保证金失败: ' + (e.shortMessage || e.message) + '（常见原因是钱包缺少 Fuji 测试网 AVAX 支付 gas）');
+  } finally { btn.disabled = false; }
+};
+
 function connectWs() {
+  if (ws) { try { ws.close(); } catch {} }
   const wsUrl = apiUrl.replace('http', 'ws') + `/ws?address=${account}`;
   ws = new WebSocket(wsUrl);
-  ws.onmessage = (ev) => {
+  ws.onmessage = async (ev) => {
     const { type, payload } = JSON.parse(ev.data);
     if (type === 'snapshot' || type === 'orderbook') renderBook(payload);
-    if (type === 'trades') log('成交: ' + JSON.stringify(payload));
-    if (type === 'order_update') log('我的订单更新: ' + JSON.stringify(payload));
-    if (type === 'settled') log('链上结算完成，tx: ' + payload.txHash);
+    if (type === 'trades') { renderTrades(payload, true); log('成交: ' + JSON.stringify(payload)); }
+    if (type === 'order_update') { log('我的订单更新: ' + JSON.stringify(payload)); refreshMyOrders(); }
+    if (type === 'settled') { log('链上结算完成，tx: ' + payload.txHash, payload.txHash); refreshBalance(); }
+    if (type === 'settlement_failed') {
+      log('链上结算失败（成交已在链下撮合，但未上链）: ' + payload.error +
+          '。常见原因是买方 Vault 保证金余额不足，可先领取 mUSDC 并存入保证金后重试。');
+    }
+  };
+  ws.onclose = () => {
+    // 页面还开着且已登录时自动重连，避免实时推送静默中断后订单簿停在旧状态
+    if (account) setTimeout(() => { if (account) connectWs(); }, 3000);
   };
 }
 
@@ -148,24 +317,140 @@ function renderBook(snap) {
   document.getElementById('bookBody').innerHTML = html;
 }
 
-document.getElementById('placeOrderBtn').onclick = async () => {
+function renderTrades(trades, prepend = false) {
+  const body = document.getElementById('tradesBody');
+  if (!prepend) body.innerHTML = '';
+  if (!trades.length && !prepend) {
+    body.innerHTML = '<tr><td colspan="6" style="text-align:left;color:#9aa4af;">暂无成交</td></tr>';
+    return;
+  }
+  if (body.textContent.includes('暂无成交')) body.innerHTML = '';
+  for (const t of trades) {
+    const tr = document.createElement('tr');
+    const settled = t.settledTxHash
+      ? `<a href="${SNOWTRACE}/tx/${t.settledTxHash}" target="_blank" style="color:#E84142;">已结算</a>`
+      : '待结算/链下';
+    tr.innerHTML = `<td>${t.id}</td><td>${t.price}</td><td>${t.quantity}</td>` +
+      `<td title="${t.buyTraderId}">${shortAddr(t.buyTraderId)}</td>` +
+      `<td title="${t.sellTraderId}">${shortAddr(t.sellTraderId)}</td><td>${settled}</td>`;
+    if (prepend) body.prepend(tr); else body.appendChild(tr);
+  }
+}
+
+async function refreshTrades() {
   try {
+    const res = await fetch(`${apiUrl}/trades?limit=10`);
+    if (!res.ok) return;
+    renderTrades(await res.json());
+  } catch {}
+}
+
+async function refreshMyOrders() {
+  if (!account) return;
+  try {
+    const res = await fetch(`${apiUrl}/orders/open`);
+    if (!res.ok) return;
+    const mine = (await res.json()).filter(
+      (o) => o.traderId.toLowerCase() === account.toLowerCase() && BigInt(o.remaining) > 0n
+    );
+    const body = document.getElementById('myOrdersBody');
+    if (!mine.length) {
+      body.innerHTML = '<tr><td colspan="6" style="text-align:left;color:#9aa4af;">暂无挂单</td></tr>';
+      return;
+    }
+    body.innerHTML = '';
+    for (const o of mine) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${o.id}</td>` +
+        `<td class="${o.side === 'buy' ? 'bid' : 'ask'}">${o.side === 'buy' ? '买' : '卖'}</td>` +
+        `<td>${o.price}</td><td>${o.remaining} / ${o.quantity}</td><td>${o.status}</td>`;
+      const td = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.className = 'secondary small';
+      btn.textContent = '撤单';
+      btn.onclick = () => cancelOrder(o.id, btn);
+      td.appendChild(btn);
+      tr.appendChild(td);
+      body.appendChild(tr);
+    }
+  } catch {}
+}
+
+async function cancelOrder(id, btn) {
+  try {
+    btn.disabled = true;
+    const res = await fetch(`${apiUrl}/orders/${id}/cancel`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ traderId: account }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    log(data.ok ? `撤单成功: ${id}` : `撤单未生效（订单可能已成交或已取消）: ${id}`);
+    await refreshMyOrders();
+  } catch (e) { log('撤单失败: ' + e.message); btn.disabled = false; }
+}
+
+/**
+ * v2 结算模式下，买单需要附带买方签署的 EIP-712 结算授权，operator 才能凭它在链上结算。
+ * 服务端不是 v2 模式时 /settlement/domain 返回 400，此时退回不带授权的普通下单。
+ */
+async function buildBuyAuthorization(price, quantity) {
+  if (!settlementDomainCache) {
+    const res = await fetch(`${apiUrl}/settlement/domain`);
+    if (!res.ok) return null;
+    settlementDomainCache = await res.json();
+  }
+  const { domain, types } = settlementDomainCache;
+  const maxAmount = BigInt(price) * BigInt(quantity);
+  const nonce = BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random() * 1000));
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+  const signature = await signer.signTypedData(domain, types, {
+    from: account, maxAmount, nonce, deadline,
+  });
+  return {
+    maxAmount: maxAmount.toString(),
+    nonce: nonce.toString(),
+    deadline: deadline.toString(),
+    signature,
+  };
+}
+
+document.getElementById('placeOrderBtn').onclick = async () => {
+  const btn = document.getElementById('placeOrderBtn');
+  try {
+    btn.disabled = true;
+    const side = document.getElementById('side').value;
+    const price = document.getElementById('price').value.trim();
+    const quantity = document.getElementById('quantity').value.trim();
+    if (!/^\d+$/.test(price) || BigInt(price) <= 0n) { log('下单失败: 价格必须是正整数'); return; }
+    if (!/^\d+$/.test(quantity) || BigInt(quantity) <= 0n) { log('下单失败: 数量必须是正整数'); return; }
+
     const body = {
       traderId: account,
-      side: document.getElementById('side').value,
-      price: document.getElementById('price').value,
-      quantity: document.getElementById('quantity').value,
+      side,
+      price,
+      quantity,
       tif: document.getElementById('tif').value,
       type: 'limit',
     };
+    if (side === 'buy') {
+      const authorization = await buildBuyAuthorization(price, quantity);
+      if (authorization) body.authorization = authorization;
+    }
     const res = await fetch(`${apiUrl}/orders`, {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
     });
     const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     log('下单结果: ' + JSON.stringify(data));
     await refreshBalance();
+    await refreshMyOrders();
   } catch (e) { log('下单失败: ' + e.message); }
+  finally { btn.disabled = false; }
 };
+
+// 打开页面就先唤醒后端（免费层休眠唤醒需要时间），等用户连钱包时通常已经就绪
+checkApiHealth();
 </script>
 </body>
 </html>

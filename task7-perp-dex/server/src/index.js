@@ -77,6 +77,15 @@ for (const row of loadOpenOrders()) {
     timestamp: row.timestamp,
     status: row.status,
   });
+  // 一并恢复这笔挂单的 EIP-712 结算授权（见 db.js 的 authorization 列），
+  // 否则进程重启后挂在盘口上的买单被人吃掉时找不到授权、链上结算会静默失败。
+  if (row.authorization) {
+    try {
+      orderAuthorizations.set(row.id, { ...JSON.parse(row.authorization), from: row.traderId });
+    } catch {
+      console.warn(`[startup] ignoring unparsable stored authorization for ${row.id}`);
+    }
+  }
   restoredCount++;
 }
 const recentTrades = loadRecentTrades(1);
@@ -235,7 +244,7 @@ app.post("/orders", async (req, res) => {
     if (authorization) {
       orderAuthorizations.set(order.id, { ...authorization, from: traderId });
     }
-    persistOrderResult(order, trades);
+    persistOrderResult(order, trades, authorization || null);
     // 撮合可能改变了盘口里已存在的 maker 挂单（部分成交/完全成交），必须一并同步落库，
     // 否则重启恢复订单簿时会读到过期的"幽灵挂单"。
     const touchedOrderIds = new Set(trades.flatMap((t) => [t.buyOrderId, t.sellOrderId]));
@@ -280,6 +289,10 @@ app.post("/orders", async (req, res) => {
           pushPrivate(t.sellTraderId, "settled", { tradeId: t.id, txHash: receipt.hash });
         } catch (settleErr) {
           console.error("[settlement] failed for trade", t.id, settleErr.message);
+          // 以前这里只写服务端日志，前端会一直等不到 settled 事件、看起来像"卡住了"。
+          // 现在把失败明确推给成交双方，前端可以把原因展示出来（常见如保证金余额不足）。
+          pushPrivate(t.buyTraderId, "settlement_failed", { tradeId: t.id, error: settleErr.message });
+          pushPrivate(t.sellTraderId, "settlement_failed", { tradeId: t.id, error: settleErr.message });
         }
       }
     }
@@ -291,8 +304,27 @@ app.post("/orders", async (req, res) => {
 });
 
 app.post("/orders/:id/cancel", (req, res) => {
+  // 撤单必须表明身份：已登录、且只能撤自己的单。以前任何人猜到订单 id
+  // （order-1、order-2… 顺序可猜）就能撤掉别人的挂单，属于未授权操作。
+  const { traderId } = req.body || {};
+  if (!traderId) return res.status(400).json({ error: "traderId is required to cancel an order" });
+  if (!sessions.has(String(traderId).toLowerCase())) {
+    return res.status(401).json({ error: "please /auth/login first" });
+  }
+  const existing = book.getOrder(req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: "order not found" });
+  if (existing.traderId.toLowerCase() !== String(traderId).toLowerCase()) {
+    return res.status(403).json({ ok: false, error: "cannot cancel another trader's order" });
+  }
   const ok = book.cancelOrder(req.params.id);
-  if (ok) broadcastPublic("orderbook", serializeSnapshot(book.getSnapshot(20)));
+  if (ok) {
+    // 撤单结果必须落库：以前只改内存，进程重启后 loadOpenOrders() 会把这笔
+    // 已撤订单从数据库里当成挂单恢复出来（"幽灵挂单"）。
+    persistOrderState(existing);
+    orderAuthorizations.delete(req.params.id);
+    broadcastPublic("orderbook", serializeSnapshot(book.getSnapshot(20)));
+    pushPrivate(existing.traderId, "order_update", serializeOrder(existing));
+  }
   res.json({ ok });
 });
 
