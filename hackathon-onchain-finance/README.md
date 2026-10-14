@@ -167,8 +167,10 @@ forge script script/Deploy.s.sol:Deploy --rpc-url $FUJI_RPC_URL --broadcast --pr
    与其测试 `test-margin.mjs`；把这笔估值正式绑定为仓位保证金仍待仓位系统完成后继续推进），允许 RWA Token 直接作为永续合约的抵押品，而不需要
    先换成 USDC。
 2. ~~**TWAP / 多源价格**~~：✅ 已在 `MultiCollateralVaultV2.sol` 中完成，见上一节。
-3. **清算引擎**：账户总市值跌破维持保证金率时，允许第三方清算人接管仓位（复用 Task4 研究报告里
-   梳理的"超额抵押 + 清算"机制）。
+3. **清算引擎**：✅ 服务层已实现（仓位引擎按独立标记价监控权益，跌破维持保证金
+   自动强平、穿仓由保险基金兜底，见 `task7-perp-dex/README.md` 3.5 节）；合约层
+   版本在 `contracts/src/PerpMarginAccount.sol`（待部署）。允许第三方清算人接管
+   仓位的开放清算人网络仍待后续。
 4. ~~**operator 多签化**~~：✅ EIP-712 签名授权门控已在 `MultiCollateralVaultV2.sol` 中完成，见上一节；
    给 `operator` 私钥本身再加多签/时间锁仍是可选的进一步加固方向。
 5. **接入 Kite AI**：让一个 AI Agent 代表用户自动监控仓位健康度、在跌破阈值前主动追加保证金或

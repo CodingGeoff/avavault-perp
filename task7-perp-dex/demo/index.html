@@ -440,7 +440,7 @@ function renderPosition(p) {
   const td = document.createElement('td');
   const btn = document.createElement('button');
   btn.className = 'secondary small';
-  btn.textContent = '市价平仓';
+  btn.textContent = '平仓';
   btn.onclick = () => closePosition(p, btn);
   td.appendChild(btn);
   tr.appendChild(td);
