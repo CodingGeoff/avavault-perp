@@ -12,7 +12,7 @@ const API_URL = process.env.API_URL || "http://localhost:4000";
 const TICK = 1n; // 价格档位间距（最小单位）
 const LEVELS = 3;
 const BASE_QTY = 10n;
-const REFRESH_MS = Number(process.env.REFRESH_MS || 8000);
+const REFRESH_MS = Number(process.env.REFRESH_MS || 30000); // 默认 30 秒一轮，避免无谓的 API/带宽消耗；可用 REFRESH_MS 环境变量调密
 
 const wallet = ethers.Wallet.createRandom();
 let openOrderIds = [];
