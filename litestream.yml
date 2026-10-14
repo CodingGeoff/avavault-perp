@@ -1,0 +1,17 @@
+# Litestream 配置：把 SQLite 的 WAL 持续复制到 Cloudflare R2（S3 兼容），
+# 服务重启/重新部署/休眠唤醒后先从 R2 恢复，实现 Render 免费层上的持久化。
+# 环境变量在启动时展开（Litestream 原生支持 $VAR 写法），密钥不写进仓库。
+# 完整开通步骤见 PERSISTENCE.md。
+
+dbs:
+  - path: /data/mini-dex.sqlite
+    replicas:
+      - type: s3
+        bucket: $R2_BUCKET
+        path: mini-dex
+        region: auto
+        endpoint: $R2_ENDPOINT
+        access-key-id: $LITESTREAM_ACCESS_KEY_ID
+        secret-access-key: $LITESTREAM_SECRET_ACCESS_KEY
+        force-path-style: true
+        sync-interval: 1s

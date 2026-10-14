@@ -1,0 +1,41 @@
+# Persistence variant of the root Dockerfile: same app build, plus Litestream
+# replicating the SQLite database to Cloudflare R2 so state survives Render
+# free-tier restarts/redeploys/spin-downs. The plain ./Dockerfile and the
+# native render.yaml deployment are untouched — deploy THIS file as a
+# separate Docker web service when you want free persistence (see
+# PERSISTENCE.md for the full click-by-click setup).
+
+FROM node:20.18.1-bookworm-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY task7-perp-dex/matching-engine ./task7-perp-dex/matching-engine
+RUN cd task7-perp-dex/matching-engine && npm install && npm run build
+
+COPY task7-perp-dex/server ./task7-perp-dex/server
+RUN cd task7-perp-dex/server && npm install && npm rebuild better-sqlite3 --build-from-source
+
+# ---- Runtime stage + Litestream ----
+FROM node:20.18.1-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG LITESTREAM_VERSION=v0.3.13
+RUN curl -fsSL "https://github.com/benbjohnson/litestream/releases/download/${LITESTREAM_VERSION}/litestream-${LITESTREAM_VERSION}-linux-amd64.tar.gz" \
+      | tar -xz -C /usr/local/bin litestream \
+    && litestream version
+
+WORKDIR /app
+COPY --from=build /app/task7-perp-dex ./task7-perp-dex
+COPY litestream.yml /etc/litestream.yml
+COPY scripts/start-persistence.sh /app/start-persistence.sh
+RUN chmod +x /app/start-persistence.sh && mkdir -p /data
+
+ENV PORT=4000
+ENV DB_PATH=/data/mini-dex.sqlite
+EXPOSE 4000
+
+WORKDIR /app/task7-perp-dex/server
+CMD ["bash", "/app/start-persistence.sh"]

@@ -211,6 +211,75 @@ WebSocket 私有频道会推送 `settled` 事件和交易哈希。
 用户撤销、伪造签名、非 operator 调用等场景）。完整设计动机、风险收窄分析见 `SECURITY_REVIEW.md`
 Finding #4。
 
+### 3.4 RWA 抵押估值接入保证金（`MultiCollateralVaultV2.totalAccountValue()` → 撮合服务）
+
+撮合服务（`server/src/margin.js`）会实时读取黑客松金库 `MultiCollateralVaultV2`
+（Fuji `0xb999cb61A4fb2FE71d1C5FBA7aD506F619dD7884`）的 `totalAccountValue()`，把用户存入的
+RWA 抵押品经 TWAP 折价后的估值，与本系统 Vault 的 mUSDC 余额合成一个综合保证金视图：
+
+- `GET /account/:address/margin` 返回两个来源的明细与 `effectiveMargin`；前端账户卡
+  同步展示 RWA 抵押估值与综合可用保证金。
+- 估值原以 quote 代币（当前部署为 WAVAX，18 位）计价，折算成 mUSDC（6 位）需要
+  部署方显式配置 `MARGIN_QUOTE_USD_PRICE`（quote 的美元参考价）；未配置时估值只
+  展示、不计入可用保证金，代码不内置写死汇率。
+- 设置 `MARGIN_ENFORCE=true` 后，限价买单在撮合前先校验综合保证金（结算时买方
+  是付款方），不足返回 403，避免撮合出必然链上结算失败的成交；默认关闭，
+  部署配置见仓库根目录 `render.yaml`。
+
+验证：`server/test-margin.mjs`（16 项，含本地 JSON-RPC 桩端到端：Vault 余额为 0、
+仅靠 RWA 估值的买单通过校验，无保证金买单被拦截）；原有 `test-e2e.mjs`、
+`test-robustness.mjs` 与撮合引擎测试回归不受影响。边界：这是服务层的购买力
+校验；仓位保证金绑定已在服务层实现（见 3.5），合约层绑定见黑客松目录的
+`PerpMarginAccount.sol`（待部署）。
+
+### 3.5 永续仓位引擎（仓位 / 杠杆 / 强平）
+
+`matching-engine/src/positions.ts` 把订单簿成交记账为带杠杆的净仓位：多空净额、
+VWAP 入场价、初始保证金 = 名义价值 / 杠杆逐笔占用、平仓按比例释放并结算已实现
+盈亏、反手先平后开。标记价来自独立预言机（见下）；权益（占用保证金 + 未实现盈亏）跌破
+维持保证金（默认 5%，`MAINTENANCE_MARGIN_BPS` 可配）时自动以标记价强平，退回
+多余保证金、穿仓部分单独记为缺口。服务端在每笔成交后更新双方仓位、落库
+（重启恢复未平仓位）、私推 `position_update`，标记价移动引发的第三方仓位风险
+也会被全局扫描强平。接口：`GET /positions/:address`、`GET /positions`、
+`POST /positions/check-liquidations`；下单可带 `leverage`（1–20），下单接口同时
+支持市价单（市价买单的 EIP-712 授权按最优卖价/标记价上浮 5% 封顶）。开启
+`MARGIN_ENFORCE` 时新敞口的保证金来自 3.4 的综合保证金（Vault mUSDC + RWA
+抵押估值）扣掉已占用部分，平仓方向不要求新保证金——即 RWA 估值在服务层正式
+成为仓位保证金来源。前端同步提供杠杆选择、仓位面板（浮盈亏/强平价）与一键平仓。
+验证：`matching-engine/test/positions.test.ts` 与 `server/test-positions.mjs`
+（含崩盘强平、市价单、资金费结算与重启恢复）。
+
+标记价已改为独立预言机（`server/src/markOracle.js`）：外部喂价
+（`MARK_PRICE_FEED_URL`）优先，其次成交 TWAP（`matching-engine/src/markPrice.ts`，
+单笔瞬时成交拉不动），样本不足才退回最新成交价且如实标注来源；`GET /markprice`
+可查当前标记价与来源。强平穿仓由保险基金兜底：强平罚金（名义价值 0.5%）与
+`POST /insurance/fund` 注资进入基金，强平时缺口先扣基金、不足记坏账
+（`GET /insurance` 查看，状态落库）。合约层对应实现见
+`hackathon-onchain-finance/contracts/src/PerpMarginAccount.sol`（直接读金库
+`totalAccountValue()` 计入仓位保证金，独立标记价强平、保险基金兜底，附
+Foundry 测试，待部署）。
+
+资金费率已实现：标记价（成交 TWAP）相对指数价（外部喂价）的溢价决定费率
+（封顶 ±`FUNDING_MAX_BPS`，默认 10bps），每 `FUNDING_INTERVAL_MS`（默认 8 小时）
+结算一期，多头付空头或反之，现金流直接调整仓位保证金并累计在
+`cumulativeFunding`；`GET /funding` 查状态、`POST /funding/apply` 在到期时触发
+结算。没有配置独立指数喂价时费率为 0、不结算。仍未实现：开放清算人网络、
+多 operator/多签；链上净额结算沿用既有成交结算通道，保险基金在服务层为记账
+状态，真实注资应打入链上 Vault 后在此登记。SQLite 仍是单机持久化（Render
+免费层磁盘不持久，重启/重新部署会清掉演示状态，生产应换托管数据库）。
+
+### 3.6 会话与私有推送加固
+
+登录（`POST /auth/login`）现在返回随机 `sessionToken`：WebSocket 私有频道
+（`order_update` / `settled`）只对携带有效 token 的连接按地址推送，只靠查询参数
+里的地址无法再订阅他人的订单与结算事件（退化为公开订单簿频道）。会话本身落库
+（SQLite `sessions` 表，7 天过期），进程重启后免重新签名登录。回归覆盖在
+`server/test-robustness.mjs`（17 项）。另有一套 GitHub Actions 草案（PR 评论中
+给出全文）：`ci.yml` 在每次 PR 上跑撮合引擎、服务端三套测试与前端语法检查；
+`deploy-demo.yml` 在 demo 前端变更合并到 main 后自动发布到 `gh-pages`，避免
+公开演示站与源码再次漂移。因当前推送令牌没有 `workflows` 权限，这两个文件
+需要仓库所有者在 GitHub 网页端添加后才会生效。
+
 ## 四、学习资源
 
 - Foundry Book（测试、fork、fuzzing）：https://book.getfoundry.sh/

@@ -12,7 +12,7 @@ const API_URL = process.env.API_URL || "http://localhost:4000";
 const TICK = 1n; // 价格档位间距（最小单位）
 const LEVELS = 3;
 const BASE_QTY = 10n;
-const REFRESH_MS = Number(process.env.REFRESH_MS || 8000);
+const REFRESH_MS = Number(process.env.REFRESH_MS || 30000); // 默认 30 秒一轮，避免无谓的 API/带宽消耗；可用 REFRESH_MS 环境变量调密
 
 const wallet = ethers.Wallet.createRandom();
 let openOrderIds = [];
@@ -31,23 +31,59 @@ async function login() {
 
 async function cancelAll() {
   for (const id of openOrderIds) {
-    await fetch(`${API_URL}/orders/${id}/cancel`, { method: "POST" }).catch(() => {});
+    await fetch(`${API_URL}/orders/${id}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ traderId: wallet.address }),
+    }).catch(() => {});
   }
   openOrderIds = [];
 }
 
+// v2 结算模式下买单必须附带买方自己的 EIP-712 授权，做市机器人也不例外。
+// 服务端不是 v2 模式时 /settlement/domain 会返回 400，这里就退回不带授权的下单。
+let settlementDomain = null;
+async function loadSettlementDomain() {
+  try {
+    const res = await fetch(`${API_URL}/settlement/domain`);
+    if (res.ok) settlementDomain = await res.json();
+  } catch {
+    settlementDomain = null;
+  }
+}
+
+async function buildAuthorization(price, quantity) {
+  if (!settlementDomain) return undefined;
+  const { domain, types } = settlementDomain;
+  const maxAmount = (price * quantity).toString();
+  const nonce = (Date.now() * 1000 + Math.floor(Math.random() * 1000)).toString();
+  const deadline = (Math.floor(Date.now() / 1000) + 3600).toString();
+  const signature = await wallet.signTypedData(domain, types, {
+    from: wallet.address,
+    maxAmount,
+    nonce,
+    deadline,
+  });
+  return { maxAmount, nonce, deadline, signature };
+}
+
 async function placeOrder(side, price, quantity) {
+  const body = {
+    traderId: wallet.address,
+    side,
+    price: price.toString(),
+    quantity: quantity.toString(),
+    type: "limit",
+    tif: "GTC",
+  };
+  if (side === "buy") {
+    const authorization = await buildAuthorization(price, quantity);
+    if (authorization) body.authorization = authorization;
+  }
   const res = await fetch(`${API_URL}/orders`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      traderId: wallet.address,
-      side,
-      price: price.toString(),
-      quantity: quantity.toString(),
-      type: "limit",
-      tif: "GTC",
-    }),
+    body: JSON.stringify(body),
   });
   const data = await res.json();
   if (data.order) openOrderIds.push(data.order.id);
@@ -68,6 +104,7 @@ async function refreshQuotes(midPrice) {
 
 async function main() {
   await login();
+  await loadSettlementDomain();
   const midPrice = BigInt(process.env.MID_PRICE || 2500);
   await refreshQuotes(midPrice);
   setInterval(() => refreshQuotes(midPrice), REFRESH_MS);
