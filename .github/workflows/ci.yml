@@ -60,6 +60,26 @@ jobs:
           for i in $(seq 1 50); do curl -sf http://127.0.0.1:4399/health && break || sleep 0.2; done
           API_URL=http://127.0.0.1:4399 node test-e2e.mjs
 
+  contracts:
+    name: Contract tests (forge)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      # lib/ is gitignored on purpose (deps are installed locally), so CI installs them too.
+      - name: Hackathon contracts (PerpMarginAccount + RWA collateral vaults)
+        working-directory: hackathon-onchain-finance/contracts
+        run: |
+          forge install foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts --no-git
+          forge test -vv
+      - name: Task7 contracts (perp matching vault)
+        working-directory: task7-perp-dex/contracts
+        run: |
+          forge install foundry-rs/forge-std OpenZeppelin/openzeppelin-contracts --no-git
+          forge test -vv
+
   demo-syntax:
     name: Demo frontend syntax check
     runs-on: ubuntu-latest
