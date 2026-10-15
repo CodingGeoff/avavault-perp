@@ -1,0 +1,14 @@
+{
+  "note": "旁白各段时长（ffprobe 实测，秒）；录制脚本按此节奏拍摄",
+  "chunks": [
+    { "id": "c1", "dur": 17.47, "scene": "ready" },
+    { "id": "c2", "dur": 16.18, "scene": "book" },
+    { "id": "c3", "dur": 15.12, "scene": "connect" },
+    { "id": "c4", "dur": 17.45, "scene": "deposit_usdc" },
+    { "id": "c5", "dur": 28.70, "scene": "deposit_rwa" },
+    { "id": "c6", "dur": 16.49, "scene": "hedge" },
+    { "id": "c7", "dur": 20.66, "scene": "order_settle" },
+    { "id": "c8", "dur": 34.13, "scene": "position+trades+contracts+perp" },
+    { "id": "c9", "dur": 23.14, "scene": "snowtrace" }
+  ]
+}

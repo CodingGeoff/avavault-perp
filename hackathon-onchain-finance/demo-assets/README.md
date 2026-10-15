@@ -9,6 +9,7 @@
 | --- | --- |
 | `avavault-perp-pitch-zh.mp4` | 中文版 Demo 视频，约 2 分 26 秒 |
 | `avavault-perp-pitch-en.mp4` | 英文版 Demo 视频，约 1 分 51 秒 |
+| `live_demo_en/avavault-perp-live-demo-en.mp4` | **完整操作实录**（英文配音 + 英文字幕，3 分 30 秒）：真钱包连接 → 存入保证金 → 存入 RWA → 测算对冲 → 下单成交 → 链上结算 → Snowtrace 验证。含 6 笔真实 Fuji 交易的哈希清单，见 [`live_demo_en/README.md`](./live_demo_en/README.md) |
 | `avavault-perp-pitch-zh.pptx` / `-en.pptx` | 对应的 Pitch Deck 源文件（10 页，可编辑） |
 | `raw_screenshots/` | 交易界面截图 + 链上浏览器（Snowtrace）截图 + 自建的链上数据仪表盘截图 |
 
@@ -20,6 +21,7 @@
 ```
 demo-assets/
 ├── raw_screenshots/           # 截图素材，想替换某一张可以直接换同名 PNG
+├── live_demo_en/              # 完整操作实录（英文配音视频 + 录制/合成脚本 + 旁白稿 + 链上哈希清单）
 ├── slides_zh/ slides_en/      # 拼好的幻灯片图片（1920x1080）
 ├── audio_zh/ audio_en/        # 分场景的配音音频
 ├── narration_zh.json          # 中文文案及其对应的幻灯片
