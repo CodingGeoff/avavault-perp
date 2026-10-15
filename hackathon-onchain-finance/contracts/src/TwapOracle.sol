@@ -33,6 +33,9 @@ contract TwapOracle {
     /// @notice 最近一次成功计算出的时间加权平均价格，Q112 定点数
     uint256 public price0Average; // token1 相对 token0 的价格
     uint256 public price1Average; // token0 相对 token1 的价格
+    /// @notice 上一个窗口的均价（首次 update 前为 0），供金库做窗口间波动率动态折价
+    uint256 public price0AveragePrev;
+    uint256 public price1AveragePrev;
     uint32 public lastWindowElapsed;
 
     event TwapUpdated(uint256 price0Average, uint256 price1Average, uint32 windowElapsed);
@@ -66,6 +69,8 @@ contract TwapOracle {
         (uint256 price0Cumulative, uint256 price1Cumulative) = _currentCumulativePrices(blockTimestamp);
 
         unchecked {
+            price0AveragePrev = price0Average;
+            price1AveragePrev = price1Average;
             price0Average = (price0Cumulative - price0CumulativeLastSnapshot) / timeElapsed;
             price1Average = (price1Cumulative - price1CumulativeLastSnapshot) / timeElapsed;
         }

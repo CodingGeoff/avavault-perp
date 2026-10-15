@@ -186,6 +186,12 @@ export function loadRecentTrades(limit = 50) {
   return db.prepare(`SELECT * FROM trades ORDER BY timestamp DESC LIMIT ?`).all(limit);
 }
 
+/** 演示彩排重置：清空订单/成交/仓位/清算状态（保留登录会话，钱包不用重新签名）。
+ *  注意这只清服务端状态，清不掉已上链的 Vault 余额变化——链上部分见 DEMO_RUNBOOK。 */
+export function clearDemoState() {
+  db.exec(`DELETE FROM orders; DELETE FROM trades; DELETE FROM positions; DELETE FROM clearing_state;`);
+}
+
 export function loadOpenOrders() {
   return db.prepare(`SELECT * FROM orders WHERE status IN ('open','partially_filled')`).all();
 }

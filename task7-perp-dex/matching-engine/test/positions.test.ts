@@ -193,3 +193,15 @@ describe("PositionManager — 资金费率", () => {
     expect(pm2.getPosition(ALICE).cumulativeFunding).toBe(25n);
   });
 });
+
+describe("PositionManager — reset（演示彩排重置）", () => {
+  it("reset 后仓位/标记价/保险基金清零", () => {
+    const pm = new PositionManager();
+    pm.applyTrade({ buyTraderId: ALICE, sellTraderId: BOB, price: 2500n, quantity: 10n });
+    pm.fundInsurance(500n);
+    pm.reset();
+    expect(pm.getPosition(ALICE).sizeSigned).toBe(0n);
+    expect(pm.getMarkPrice()).toBeNull();
+    expect(pm.getInsuranceState().insuranceFund).toBe(0n);
+  });
+});
