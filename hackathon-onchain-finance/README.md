@@ -12,6 +12,7 @@
 | 项目介绍（问题/方案/亮点） | 本文档全文 | ✅ |
 | Demo 视频（中文版） | `demo-assets/avavault-perp-pitch-zh.mp4`（约 2 分 26 秒） | ✅ |
 | Demo 视频（英文版） | `demo-assets/avavault-perp-pitch-en.mp4`（约 1 分 51 秒） | ✅ 中英文各一版，提交时任选其一，或都附上 |
+| Demo 视频（完整操作实录·英文配音） | `demo-assets/live_demo_en/avavault-perp-live-demo-en.mp4`（3 分 30 秒，真钱包真交易真结算，含 6 笔 Fuji 交易哈希） | ✅ 与 Pitch 视频互补：这一版是端到端操作实录，证据清单见 `demo-assets/live_demo_en/README.md` |
 | Pitch Deck | `demo-assets/avavault-perp-pitch-zh.pptx` / `-en.pptx` | ✅ 10 页 |
 | 代码仓库 | 本仓库 `hackathon-onchain-finance/` + 你 fork 后的 GitHub 链接 | ⬜ 需要你 fork/push 后把链接填进 Pitch Deck 最后一页 |
 | 公网可访问链接（如有） | 合约均已部署在 Fuji 测试网，见下方"真实部署记录" | ✅ |

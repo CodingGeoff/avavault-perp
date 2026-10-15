@@ -1,0 +1,51 @@
+{
+  "voice": "voice-00",
+  "language": "en",
+  "chunks": [
+    {
+      "id": "c1",
+      "scene": "intro",
+      "text": "Hi, this is AvaVault Perp — a perpetual futures margin layer that accepts tokenized real world assets as collateral. I'm running the whole flow live on the Avalanche Fuji testnet, with a real wallet, real transactions, and real on chain settlement. Let's go through it step by step."
+    },
+    {
+      "id": "c2",
+      "scene": "ready_and_orderbook",
+      "text": "The page is connected to a local matching engine, which is wired to the contracts deployed on Fuji. The order book already has live depth around a reference price of twenty five hundred, seeded by a demo market maker that holds real test mUSDC in the vault."
+    },
+    {
+      "id": "c3",
+      "scene": "connect_wallet",
+      "text": "First, I connect the wallet. Logging in only signs a message — no funds move. The account panel now shows the address, its on chain vault margin balance of one thousand test mUSDC, and whether this wallet is recognized as an asset side account."
+    },
+    {
+      "id": "c4",
+      "scene": "deposit_stablecoin_margin",
+      "text": "Next, I deposit stablecoin margin. That fires three real transactions: claim one thousand test mUSDC from the faucet, approve the vault, and deposit. Settlement is charged against the buyer's vault balance, so funding the account is exactly what makes a real on chain fill possible."
+    },
+    {
+      "id": "c5",
+      "scene": "deposit_rwa_and_twap",
+      "text": "Now the interesting part — collateralizing the real world asset. I approve and deposit one hundred SRT RWA tokens into the MultiCollateralVaultV2. The vault prices collateral with a sixty second time weighted average price instead of a spot price, so a brand new deposit has no value until that window has warmed up. Right now it reads zero — and notice how the interface handles it: the deposit is real, the value is zero, and it is explicitly marked as not counted toward margin. Conservatively reporting zero beats printing a number that could be manipulated."
+    },
+    {
+      "id": "c6",
+      "scene": "hedge_sizing",
+      "text": "With collateral in place, I size the hedge. The engine takes the asset value and the hedge ratio, pulls a reference price from the best ask in the book, and returns a suggested short size — ninety nine contracts — together with whether the required margin is covered."
+    },
+    {
+      "id": "c7",
+      "scene": "fill_and_onchain_settlement",
+      "text": "Placing the order crosses the spread and fills immediately against the maker's resting bid. The matching engine then settles that trade on chain: the buyer signs an E I P seven one two authorization, and the operator submits it to the vault. Watch the settlement log — it comes back with a real transaction hash, not a placeholder."
+    },
+    {
+      "id": "c8",
+      "scene": "position_trades_and_contract_panels",
+      "text": "Here is the result: a short position of ninety nine contracts with an average entry of two thousand four hundred and ninety nine, margin reserved, and a liquidation price. Recent trades shows the fill and confirms it is settled on chain. Two panels are worth a closer look. The contracts panel lists every deployment on Fuji, including PerpMarginAccount — the contract level margin engine we deployed earlier today. Its panel reads live from the chain: the independent mark price, the insurance fund balance, and cumulative coverage versus bad debt."
+    },
+    {
+      "id": "c9",
+      "scene": "snowtrace_and_outro",
+      "text": "Finally, the proof. This is the settlement transaction that just landed: status success, on Fuji, verifiable by anyone on Snowtrace. Every hash in this demo was produced live — run it again and the hashes will change, because the trades are real. That is the full loop: real world asset collateral, on chain valuation, perpetual margin, and real settlement. Thanks for watching."
+    }
+  ]
+}

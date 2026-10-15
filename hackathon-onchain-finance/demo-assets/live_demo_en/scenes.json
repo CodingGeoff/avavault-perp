@@ -1,0 +1,93 @@
+{
+  "scenes": [
+    {
+      "name": "ready",
+      "start": 1.45,
+      "end": 19.23,
+      "dur": 17.77,
+      "target": 17.77
+    },
+    {
+      "name": "book",
+      "start": 19.23,
+      "end": 35.71,
+      "dur": 16.49,
+      "target": 16.48
+    },
+    {
+      "name": "connect",
+      "start": 35.71,
+      "end": 51.15,
+      "dur": 15.43,
+      "target": 15.42
+    },
+    {
+      "name": "deposit_usdc",
+      "start": 51.15,
+      "end": 68.91,
+      "dur": 17.75,
+      "target": 17.75
+    },
+    {
+      "name": "deposit_rwa",
+      "start": 68.91,
+      "end": 97.91,
+      "dur": 29,
+      "target": 29
+    },
+    {
+      "name": "hedge",
+      "start": 97.92,
+      "end": 114.72,
+      "dur": 16.8,
+      "target": 16.79
+    },
+    {
+      "name": "order_settle",
+      "start": 114.73,
+      "end": 135.7,
+      "dur": 20.97,
+      "target": 20.96
+    },
+    {
+      "name": "position",
+      "start": 135.7,
+      "end": 144.7,
+      "dur": 9.01,
+      "target": 9
+    },
+    {
+      "name": "trades",
+      "start": 144.7,
+      "end": 152.71,
+      "dur": 8,
+      "target": 8
+    },
+    {
+      "name": "contracts",
+      "start": 152.71,
+      "end": 160.71,
+      "dur": 8,
+      "target": 8
+    },
+    {
+      "name": "perp_panel",
+      "start": 160.71,
+      "end": 170.15,
+      "dur": 9.44,
+      "target": 9.430000000000003
+    },
+    {
+      "name": "snowtrace",
+      "start": 170.15,
+      "end": 193.6,
+      "dur": 23.44,
+      "target": 23.44
+    }
+  ],
+  "txHash": "0x0a25c31786ed479d88a2e4790cda5fdd4db1a4fb447a54f3448d935341a0edd3",
+  "video": [
+    "/home/user/demo_video/raw/page@543649342f4d4e3d45407e97e1fb4c38.webm"
+  ],
+  "lang": "en"
+}
