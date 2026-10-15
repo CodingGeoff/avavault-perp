@@ -1,0 +1,33 @@
+name: Deploy demo to GitHub Pages
+
+# Publishes the static trading demo (task7-perp-dex/demo) to the gh-pages
+# branch whenever it changes on main, so the public demo site can never
+# silently drift behind the reviewed source again (that drift previously
+# shipped a frontend whose buy orders were rejected by the v2 backend).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "task7-perp-dex/demo/**"
+      - ".github/workflows/deploy-demo.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-demo
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish demo directory to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./task7-perp-dex/demo
+          publish_branch: gh-pages

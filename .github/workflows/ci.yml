@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  matching-engine:
+    name: Matching engine tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: task7-perp-dex/matching-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.18.1"
+          cache: npm
+          cache-dependency-path: task7-perp-dex/matching-engine/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  server:
+    name: Server tests (robustness + margin + e2e)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.18.1"
+          cache: npm
+          cache-dependency-path: |
+            task7-perp-dex/matching-engine/package-lock.json
+            task7-perp-dex/server/package-lock.json
+      - name: Build matching engine (server imports its dist output)
+        working-directory: task7-perp-dex/matching-engine
+        run: npm ci && npm run build
+      - name: Install server dependencies
+        working-directory: task7-perp-dex/server
+        run: npm ci && npm rebuild better-sqlite3 --build-from-source
+      - name: Robustness tests (cancel auth, restart persistence, WS privacy, session restore)
+        working-directory: task7-perp-dex/server
+        run: node test-robustness.mjs
+      - name: Margin integration tests (totalAccountValue buying power)
+        working-directory: task7-perp-dex/server
+        run: node test-margin.mjs
+      - name: Position engine tests (leverage, liquidation, restart restore)
+        working-directory: task7-perp-dex/server
+        run: node test-positions.mjs
+      - name: End-to-end scenarios against a fresh server
+        working-directory: task7-perp-dex/server
+        run: |
+          DB_PATH=/tmp/ci-e2e.sqlite PORT=4399 node src/index.js &
+          SERVER_PID=$!
+          trap "kill $SERVER_PID" EXIT
+          for i in $(seq 1 50); do curl -sf http://127.0.0.1:4399/health && break || sleep 0.2; done
+          API_URL=http://127.0.0.1:4399 node test-e2e.mjs
+
+  demo-syntax:
+    name: Demo frontend syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.18.1"
+      - name: Extract and syntax-check the inline demo script
+        run: |
+          python3 - <<'EOF'
+          import re
+          html = open('task7-perp-dex/demo/index.html').read()
+          m = re.search(r'<script>\n(.*)\n</script>\s*</body>', html, re.S)
+          assert m, 'inline script not found'
+          open('/tmp/demo-script.js', 'w').write(m.group(1))
+          EOF
+          node --check /tmp/demo-script.js
