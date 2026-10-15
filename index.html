@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <title>AvaVault Perp — RWA 永续保证金 · RWA-Collateralized Perpetual Margin</title>
-<meta name="description" content="AvaVault Perp：生息 RWA 不卖出、不借款，直接成为永续合约保证金。TWAP 链上估值、EIP-712 授权结算，Avalanche Fuji 真实部署。" />
+<meta name="description" content="AvaVault Perp：在 Avalanche Fuji 演示 RWA 抵押品 TWAP 估值、保证金换算状态、永续撮合与 EIP-712 授权结算。" />
 <meta name="theme-color" content="#0b0d10" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23E84142'/%3E%3Cpath d='M16 6 L26 24 L21.5 24 L16 13.5 L10.5 24 L6 24 Z' fill='white'/%3E%3C/svg%3E" />
 <script src="./vendor/ethers.umd.min.js"></script>
@@ -48,11 +48,14 @@
   input:focus,select:focus{outline:2px solid rgba(232,65,66,.55);outline-offset:0;}
   .pill::before{content:'●';margin-right:5px;font-size:9px;vertical-align:1px;}
   .pill.ok::before{color:#4ade80;} .pill.busy::before{color:#facc15;} .pill.err::before{color:#f87171;}
-  .steps{max-width:960px;margin:14px auto 0;padding:0 20px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
-  .step{background:#15181c;border:1px solid #23272c;border-radius:10px;padding:10px 12px;font-size:12px;color:var(--muted);line-height:1.5;}
-  .step b{display:block;color:#fff;font-size:12.5px;margin-bottom:2px;}
-  .step b i{font-style:normal;color:var(--red);margin-right:6px;}
-  @media (max-width:760px){main{grid-template-columns:1fr;}.steps{grid-template-columns:1fr 1fr;}}
+  /* 页面主视觉是交易产品本身；工作流只做一行概念地图，不再把首屏做成编号教程。 */
+  .workflow{max-width:960px;margin:12px auto 0;padding:0 20px;}
+  .workflow-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;border:1px solid #23272c;border-radius:10px;background:rgba(21,24,28,.72);font-size:11px;color:var(--muted);}
+  .workflow-item{white-space:nowrap;}
+  .workflow-item strong{color:#e8ecf0;font-weight:600;}
+  .workflow-arrow{color:var(--red);opacity:.8;}
+  .workflow-note{margin-left:auto;color:#68717b;font-size:10.5px;}
+  @media (max-width:760px){main{grid-template-columns:1fr;}.workflow-note{width:100%;margin-left:0;}}
 
   /* ---- 商业化视觉层：品牌、层级、数字排版 ---- */
   :root{--line:#262c33;--num:ui-monospace,'SF Mono',Menlo,Consolas,monospace;}
@@ -65,7 +68,6 @@
   button{transition:filter .15s ease,transform .05s ease;}
   button:active:not(:disabled){transform:translateY(1px);}
   button:not(.secondary){background:linear-gradient(180deg,#f05253,#d93434);}
-  .step b i{background:var(--red);color:#fff;border-radius:50%;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;}
   tbody tr:hover td{background:rgba(255,255,255,.025);}
   ::selection{background:rgba(232,65,66,.4);}
 
@@ -91,7 +93,8 @@
     <select id="langSel" style="width:auto;padding:6px;margin:0;" title="Language">
       <option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="en">English</option>
     </select>
-    <button id="guideBtn" class="secondary">▶ 新手引导</button>
+    <button id="guideBtn" class="secondary" title="可选演示导览：高亮解释功能，不会代替你操作">演示导览</button>
+    <button id="presenterBtn" class="secondary" title="打开后引导面板里会多出一段讲解要点（默认关闭：页面就是产品本身，不是提词器）">讲稿</button>
     <button id="connectBtn">连接钱包并登录</button>
   </div>
 </header>
@@ -102,17 +105,20 @@
     <a href="https://testnet.snowtrace.io/address/0x0425352bc3c5293D5629c27525969439Ab9C27b5" target="_blank" style="color:#E84142;">Snowtrace</a>
   </div>
 </div>
-<div class="steps">
-  <div class="step"><b><i>1</i>存入 RWA 抵押</b>生息资产直接进金库，不卖出、不借款</div>
-  <div class="step"><b><i>2</i>TWAP 折价估值</b>合约读链上均价打七折，操纵现价无效</div>
-  <div class="step"><b><i>3</i>测算对冲仓位</b>按资产估值与对冲比例算出空单大小</div>
-  <div class="step"><b><i>4</i>成交并链上结算</b>每笔结算上链，Snowtrace 当场可查</div>
+<div class="workflow" aria-label="系统工作流">
+  <div class="workflow-line">
+    <span class="workflow-item"><strong>资产</strong> · RWA 抵押</span><span class="workflow-arrow">→</span>
+    <span class="workflow-item"><strong>估值</strong> · 链上 TWAP</span><span class="workflow-arrow">→</span>
+    <span class="workflow-item"><strong>风险</strong> · 永续仓位测算</span><span class="workflow-arrow">→</span>
+    <span class="workflow-item"><strong>验证</strong> · Fuji 交易回执</span>
+    <span class="workflow-note">市场报价与 RWA 估值是两条独立数据链，详情见账户状态</span>
+  </div>
 </div>
 <main>
   <div class="card">
     <h3>账户</h3>
     <div class="row"><span class="muted">地址</span><span id="account" class="addr">未连接</span></div>
-    <div class="row" title="钱包自检（仅自己看）"><span class="muted" style="font-size:10px;">状态</span><span id="roleHint" style="font-size:10px;color:#5c6670;">-</span></div>
+    <div class="row" title="这行只识别钱包持有的 RWA / 合约 owner 身份，不代表对冲计算或保证金校验已通过"><span class="muted" style="font-size:10px;">钱包角色</span><span id="roleHint" style="font-size:10px;color:#5c6670;">-</span></div>
     <div class="row"><span class="muted">链上 Vault 保证金余额</span><span id="vaultBalance">-</span></div>
     <div class="row"><span class="muted">RWA 抵押估值（MultiCollateralVault）</span><span id="rwaValue">-</span></div>
     <div class="row"><span class="muted">综合可用保证金</span><span id="effectiveMargin">-</span></div>
@@ -129,37 +135,48 @@
   </div>
 
   <div class="card">
-    <h3>RWA 抵押（把生息资产直接变保证金）</h3>
+    <h3>RWA 抵押 · MultiCollateralVaultV2</h3>
     <div class="row"><span class="muted">钱包 SRT-RWA 余额</span><span id="rwaWalletBal">-</span></div>
     <div class="row"><span class="muted">已存入金库的 RWA</span><span id="rwaVaultBal">-</span></div>
     <div class="row"><span class="muted">金库 TWAP 折价估值</span><span id="rwaValue2">-</span></div>
     <label>存入数量（SRT-RWA）</label>
     <input id="rwaAmount" value="100" inputmode="numeric" />
     <button id="rwaDepositBtn" class="secondary" disabled>授权并存入 RWA 到 MultiCollateralVaultV2</button>
+    <button id="refreshTwapBtn" class="secondary small" disabled>推进 TWAP 并刷新估值（链上）</button>
     <div class="hint">
-      存入的是真实 Fuji 合约交易，估值由链上 TWAP 窗口决定：刚存入时估值可能先显示 0，
-      要等 TWAP 窗口走完才计入保证金（宁可先按 0 算，也不拿可被操纵的瞬时价格当保证金）。
-      演示钱包需预先持有 SRT-RWA（发行方分配），没有余额时此按钮不可用。
+      存入的是真实 Fuji 合约交易，估值由链上 TWAP 窗口决定：刚存入时估值可能先显示 0。
+      当前部署最短窗口为 60 秒；到时点击“推进 TWAP 并刷新估值”（会发一笔链上交易、消耗少量 AVAX），
+      更新窗口后才能读到价格（宁可先按 0 算，也不拿可被操纵的瞬时价格当保证金）。
+      估值的计价单位是登记抵押品时配置的 quote token（当前 Fuji 部署为 WAVAX，18 位小数），
+      数字是 TWAP 定点数整数除法的结果，末位可能比"整齐小数"少 1 wei（0.279999… 而不是 0.28），
+      这是链上整数运算的截断、不是浮点误差，界面按 4 位小数展示。
+      要把它并进"综合可用保证金"，服务端需配置 quote→USD 换算率（MARGIN_QUOTE_USD_PRICE）；
+      没配时只如实展示、不假装已计入。演示钱包需预先持有 SRT-RWA（发行方分配），没有余额时此按钮不可用。
     </div>
   </div>
 
   <div class="card">
     <h3>对冲测算（持有 RWA → 开多大的对冲仓位）</h3>
-    <label>想对冲的资产估值（与保证金同单位，整数）</label>
+    <label>对冲名义规模（最小单位；1,000,000 = 1 mUSDC）</label>
     <input id="hedgeAssetValue" value="250000" inputmode="numeric" />
     <label>对冲比例 %（100 = 全额对冲）</label>
     <input id="hedgeRatio" value="100" inputmode="numeric" />
-    <label>参考价格（留空用当前标记价）</label>
+    <label>参考价格（留空则自动取：标记价 &gt; 盘口最优价 &gt; 服务端兜底值）</label>
     <input id="hedgeRefPrice" placeholder="例如 2500" inputmode="numeric" />
     <button id="hedgeQuoteBtn" class="secondary" disabled>计算对冲仓位</button>
     <div class="row"><span class="muted">对冲名义价值</span><span id="hedgeNotional">-</span></div>
     <div class="row"><span class="muted">建议空单数量</span><span id="hedgeQty">-</span></div>
     <div class="row"><span class="muted">所需保证金 / 可用</span><span id="hedgeMargin">-</span></div>
     <div class="row"><span class="muted">保证金是否覆盖</span><span id="hedgeCovered">-</span></div>
+    <div class="row"><span class="muted">参考价来源</span><span id="hedgeRefState">-</span></div>
     <button id="hedgeFillBtn" class="secondary" disabled>按测算结果填入空单（卖出）</button>
     <div class="hint">
       逻辑：对冲名义 = 资产估值 × 对冲比例；数量 = 名义 ÷ 参考价；占用 = 名义 ÷ 杠杆。
-      当前演示市场是示例标的，只用于看清保证金占用与强平价；真实对冲时换成与资产相关的指数市场，保证金层不变。
+      参考价拿不到时（刚重置、盘口空、还没有成交）这里会如实说明缺哪一层、怎么补，
+      并自动填入一个可用的参考价重试一次，不会让流程停在一句英文报错上。
+      口径说明：演示市场的价格与名义价值都以保证金代币最小单位计（1 价格单位 = 1e-6 mUSDC），
+      所以 2500 × 10 的结算金额是 0.025 mUSDC；上面的规模需手动输入，目前不会从 0.28 WAVAX 的 RWA 估值自动换算。
+      重点是规则与链上结算路径，不是金额量级。
     </div>
   </div>
 
@@ -210,7 +227,7 @@
       <thead><tr><th>方向</th><th>数量</th><th>入场价</th><th>标记价</th><th>未实现盈亏</th><th>占用保证金</th><th>累计资金费</th><th>强平价</th><th></th></tr></thead>
       <tbody id="positionBody"><tr><td colspan="9" style="text-align:left;color:#9aa4af;">暂无仓位</td></tr></tbody>
     </table>
-    <div class="hint">仓位保证金来自综合保证金（Vault mUSDC 余额 + RWA 抵押估值）；权益跌破维持保证金（5%）将触发强平。<span id="markPriceInfo"></span><span id="fundingInfo"></span></div>
+    <div class="hint">仓位风险参数由撮合服务计算；订单是否在撮合前强制校验保证金，取决于服务端配置。当前可用金额以账户区显示为准（RWA 估值未换算时不会计入）。维持保证金率为 5%。<span id="markPriceInfo"></span><span id="fundingInfo"></span></div>
   </div>
 
   <div class="card full">
@@ -240,6 +257,50 @@
   </div>
 
   <div class="card full">
+    <h3>演示控制台（自检 · 重跑）</h3>
+    <details>
+      <summary style="font-size:12.5px;color:#9aa4af;cursor:pointer;">展开：开演前自检、一键重跑、把链上保证金提回来从头再来</summary>
+      <div style="margin-top:10px;">
+        <div class="row"><span class="muted">参考价 / 标记价</span><span id="chkRefPrice">-</span></div>
+        <div class="row"><span class="muted">盘口深度</span><span id="chkBook">-</span></div>
+        <div class="row"><span class="muted">链上结算</span><span id="chkSettlement">-</span></div>
+        <div class="row"><span class="muted">RWA 估值是否计入保证金</span><span id="chkRwa">-</span></div>
+        <div id="chkList" style="margin-top:8px;font-size:12px;line-height:1.8;color:#9aa4af;"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+          <button id="selfCheckBtn" class="secondary small">一键自检</button>
+          <button id="refreshAllBtn" class="secondary small">刷新全部数据</button>
+          <button id="seedBookBtn" class="secondary small">铺盘口（演示流动性）</button>
+          <button id="resetDemoBtn" class="secondary small">清空服务端演示状态</button>
+          <button id="replayAllBtn" class="small">全部重跑（清空 → 铺盘口 → 回到第 1 步）</button>
+        </div>
+        <div style="margin-top:12px;border-top:1px solid #23272c;padding-top:10px;">
+          <label>管理员令牌 ADMIN_RESET_TOKEN（只保存在本机浏览器，用于清空状态 / 铺盘口）</label>
+          <input id="adminToken" type="password" placeholder="服务端未配置该令牌时，清空与铺盘口不可用" />
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;">
+            <div style="flex:1;min-width:160px;">
+              <label>提回 mUSDC（留空 = 全部）</label>
+              <input id="withdrawUsdc" placeholder="例如 1000" inputmode="numeric" />
+            </div>
+            <div style="flex:1;min-width:160px;">
+              <label>提回 SRT-RWA（留空 = 全部）</label>
+              <input id="withdrawRwa" placeholder="例如 100" inputmode="numeric" />
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+            <button id="withdrawUsdcBtn" class="secondary small" disabled>提回 mUSDC 保证金（链上）</button>
+            <button id="withdrawRwaBtn" class="secondary small" disabled>提回 RWA 抵押（链上）</button>
+          </div>
+          <div class="hint">
+            “全部重跑”做的是：清空服务端订单簿/仓位/成交/标记价样本 → 重新铺演示盘口 → 刷新链上读数 → 引导回到第 1 步。
+            它不会动链上余额（链上不可逆，也不该由演示按钮动）。要真正从零再来一遍：用上面两个“提回”按钮
+            把 mUSDC 和 RWA 取回钱包，再按引导重新存一次——抵押品随时可取，这正是它能当保证金的前提。
+          </div>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <div class="card full">
     <h3>日志 / 成交回报</h3>
     <div class="log" id="log"><div>等待连接...</div></div>
   </div>
@@ -253,8 +314,8 @@
     <span id="tourProg" style="font-size:11px;color:#9aa4af;"></span>
   </div>
   <div id="tourBody" style="font-size:13px;line-height:1.75;margin-top:8px;color:#d7dde3;"></div>
-  <div style="margin-top:10px;background:#0f1114;border:1px solid #23272c;border-radius:10px;padding:9px 11px;">
-    <div style="font-size:11px;color:#E84142;font-weight:700;" id="tourSayLabel">照着念</div>
+  <div id="tourSayWrap" style="display:none;margin-top:10px;background:#0f1114;border:1px solid #23272c;border-radius:10px;padding:9px 11px;">
+    <div style="font-size:11px;color:#E84142;font-weight:700;" id="tourSayLabel">讲解要点</div>
     <div id="tourSay" style="font-size:12.5px;line-height:1.7;color:#fde68a;margin-top:3px;"></div>
   </div>
   <div id="tourState" style="font-size:11.5px;margin-top:9px;color:#9aa4af;"></div>
@@ -262,6 +323,7 @@
     <button id="tourPrev" class="secondary small">上一步</button>
     <button id="tourNext" class="small">下一步</button>
     <button id="tourDone" class="small">我已完成</button>
+    <button id="tourRestart" class="secondary small">重新开始</button>
     <button id="tourExit" class="secondary small">退出引导</button>
   </div>
 </div>
@@ -289,7 +351,11 @@ const ERC20_ABI = [
   'function faucet(uint256 amount) external',
   'function approve(address spender, uint256 amount) external returns (bool)',
 ];
-const VAULT_ABI = ['function deposit(uint256 amount) external'];
+const VAULT_ABI = [
+  'function deposit(uint256 amount) external',
+  'function withdraw(uint256 amount) external',
+  'function balanceOf(address) view returns (uint256)',
+];
 const RWA_ABI = [
   'function balanceOf(address) view returns (uint256)',
   'function approve(address spender, uint256 amount) external returns (bool)',
@@ -298,16 +364,86 @@ const RWA_ABI = [
 ];
 const MC_VAULT_ABI = [
   'function deposit(address token, uint256 amount) external',
+  'function withdraw(address token, uint256 amount) external',
   'function rawBalance(address user, address token) view returns (uint256)',
   'function owner() view returns (address)',
+  'function oracles(address token) view returns (address)',
+  'function pokeOracle(address token) returns (bool)',
 ];
+const TWAP_ORACLE_ABI = [
+  'function minPeriod() view returns (uint256)',
+  'function blockTimestampLastSnapshot() view returns (uint32)',
+];
+// RWA 抵押估值在金库里以 quote token 计价（当前 Fuji 部署配置为 WAVAX，18 位小数）
+const QUOTE_SYMBOL = 'WAVAX';
+// 演示市场的价格锚（与做市脚本/服务端兜底参考价一致）：盘口与标记价都不可用时用它试算，
+// 界面上会明确标注这是兜底值、不是市场数据。
+const DEFAULT_REF_PRICE = '2500';
 
 let signer, account, apiUrl, ws, settlementDomainCache, sessionToken;
 let latestBestBid = null, latestBestAsk = null;
+let PRESENTER = localStorage.getItem('avavault-presenter') === '1';
+let lastMarginView = null;
+// 链上读数的原始 BigInt，供引导的"完成检测"直接判断（不靠正则去猜界面文本，
+// 文本格式一改检测就失效——之前 0.0 与 0 的差别就让第 3 步误判为已完成）
+let lastVaultBalance = null;
+let lastRwaVaultBalance = null;
+let lastRwaWalletBalance = null;
 const priceHistory = [];
 const seenTradeIds = new Set();
 
 function shortAddr(a) { return a ? a.slice(0, 6) + '…' + a.slice(-4) : ''; }
+
+/**
+ * 十进制字符串四舍五入到指定小数位（纯字符串运算，不经过 double）。
+ * 链上估值经常是 0.279999999999999999 这种"整数除法截断"结果，直接铺在界面上
+ * 会让人以为是浮点 bug；这里按 4 位小数四舍五入展示，原始值仍保留在 title 里可查。
+ */
+function roundDecimalsStr(s, maxFraction) {
+  let str = String(s).trim();
+  const neg = str.startsWith('-');
+  if (neg) str = str.slice(1);
+  const [whole, frac = ''] = str.split('.');
+  if (frac.length <= maxFraction) {
+    const trimmedFrac = frac.replace(/0+$/, '');
+    return (neg ? '-' : '') + whole + (trimmedFrac ? '.' + trimmedFrac : '');
+  }
+  const keep = frac.slice(0, maxFraction);
+  const roundUp = frac.charCodeAt(maxFraction) - 48 >= 5;
+  let digits = (whole + keep).split('').map((c) => c.charCodeAt(0) - 48);
+  if (roundUp) {
+    let i = digits.length - 1;
+    while (i >= 0) { digits[i] += 1; if (digits[i] < 10) break; digits[i] = 0; i -= 1; }
+    if (i < 0) digits.unshift(1);
+  }
+  const intLen = digits.length - maxFraction;
+  const intPart = digits.slice(0, intLen).join('');
+  const fracPart = digits.slice(intLen).join('').replace(/0+$/, '');
+  return (neg ? '-' : '') + intPart + (fracPart ? '.' + fracPart : '');
+}
+
+/** 最小单位整数 -> 人类可读数量（默认最多 4 位小数） */
+function fmtAmount(value, decimals, symbol, maxFraction = 4) {
+  try {
+    const raw = ethers.formatUnits(BigInt(value), decimals);
+    const rounded = roundDecimalsStr(raw, maxFraction);
+    return symbol ? `${rounded} ${symbol}` : rounded;
+  } catch { return String(value); }
+}
+
+/** 引擎价格/名义口径 = 保证金代币最小单位（1e-6 mUSDC），展示时给出可读换算 */
+function fmtEngineMoney(value) {
+  const human = fmtAmount(value, 6, 'mUSDC', 6);
+  return `${value}（≈ ${human}）`;
+}
+
+/** 把状态行写成"值 + 说明"，并把原始值放进 title 便于评委追问时展开 */
+function setState(id, text, title) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  if (title) el.title = title;
+}
 
 function log(msg, txHash) {
   const el = document.getElementById('log');
@@ -366,6 +502,7 @@ async function parseError(res) {
  * 失败原因分类后显示在指示灯的悬浮提示和日志里。
  */
 let apiReady = false;
+let selfCheckDone = false;       // 首次就绪时做一次静默自检（之后由“一键自检”/“刷新全部数据”手动触发）
 let healthInFlight = null;       // 单飞：后台监测和用户点击共用同一个进行中的检测，不叠加并发请求
 let healthProblem = '';          // 最近一次失败原因（日志去重 + 连接按钮提示用）
 let notReadySince = Date.now();  // 本轮"未就绪"从何时开始，用于显示已等待时长
@@ -419,6 +556,9 @@ async function checkApiHealth(timeoutMs = 15000) {
       apiReady = true;
       healthProblem = '';
       setApiStatus(r.data.settlementEnabled ? 'API: 已就绪（链上结算已开启）' : 'API: 已就绪', 'ok');
+      // 就绪即做一次静默自检：把参考价来源 / 盘口深度 / 结算开关 / RWA 是否计入填进界面。
+      // 演示者一眼就能看到"还差什么"，不必等到点对冲测算才发现参考价拿不到。
+      if (!selfCheckDone) { selfCheckDone = true; selfCheck({ quiet: true }).catch(() => {}); }
       return r.data;
     }
     if (apiReady) { apiReady = false; notReadySince = Date.now(); }
@@ -531,11 +671,16 @@ document.getElementById('connectBtn').onclick = async () => {
     document.getElementById('placeOrderBtn').disabled = false;
     document.getElementById('depositBtn').disabled = false;
     document.getElementById('hedgeQuoteBtn').disabled = false;
+    document.getElementById('withdrawUsdcBtn').disabled = false;
+    document.getElementById('withdrawRwaBtn').disabled = false;
+    document.getElementById('refreshTwapBtn').disabled = false;
 
     await refreshBalance();
     await refreshRwa();
     await Promise.all([refreshMyOrders(), refreshTrades(), refreshPosition()]);
     connectWs();
+    // 连上钱包后立刻自检一次：参考价 / 盘口 / 结算 / RWA 计入状态，缺什么当场就能看到
+    await selfCheck({ quiet: true });
   } catch (e) { log('连接失败: ' + e.message); }
   finally { btn.disabled = false; }
 };
@@ -544,27 +689,45 @@ async function refreshBalance() {
   try {
     const res = await fetch(`${apiUrl}/balance/${account}`);
     const data = await res.json();
+    lastVaultBalance = data.onchain ? BigInt(data.balance) : 0n;
     document.getElementById('vaultBalance').textContent = data.onchain
-      ? ethers.formatUnits(data.balance, 6) + ' mUSDC'
+      ? fmtAmount(data.balance, 6, 'mUSDC')
       : '(未开启链上结算演示)';
+    document.getElementById('withdrawUsdcBtn').disabled = lastVaultBalance <= 0n;
   } catch (e) { log('查询余额失败: ' + e.message); }
   try {
     const res = await fetch(`${apiUrl}/account/${account}/margin`);
     if (!res.ok) return;
     const m = await res.json();
+    lastMarginView = m;
     const rwaEl = document.getElementById('rwaValue');
     const effEl = document.getElementById('effectiveMargin');
+    const rawQuote = ethers.formatUnits(m.rwaAccountValueQuote ?? '0', 18);
+    const quoteText = fmtAmount(m.rwaAccountValueQuote ?? '0', 18, QUOTE_SYMBOL);
     if (!m.rwaConfigured) {
       rwaEl.textContent = '(未配置 RWA 金库)';
-      effEl.textContent = ethers.formatUnits(m.effectiveMargin, 6) + ' mUSDC';
+      rwaEl.title = '服务端未配置 MULTICOLLATERAL_VAULT_ADDRESS';
+      effEl.textContent = fmtAmount(m.effectiveMargin, 6, 'mUSDC');
     } else if (m.rwaCounted) {
-      rwaEl.textContent = ethers.formatUnits(m.rwaMarginValue, 6) + ' mUSDC（已计入）';
-      effEl.textContent = ethers.formatUnits(m.effectiveMargin, 6) + ' mUSDC';
+      rwaEl.textContent = `${fmtAmount(m.rwaMarginValue, 6, 'mUSDC')}（已计入 · 链上估值 ${quoteText}）`;
+      rwaEl.title = `链上 TWAP 折价估值 ${rawQuote} ${QUOTE_SYMBOL}，按服务端配置的 quote→USD 换算率折成 mUSDC 后计入综合保证金`;
+      effEl.textContent = fmtAmount(m.effectiveMargin, 6, 'mUSDC');
     } else {
-      // 服务端未配置 quote 换算率时，只展示链上读到的原始估值（quote 计价、18 位小数），不假装已计入
-      rwaEl.textContent = ethers.formatUnits(m.rwaAccountValueQuote, 18) + '（quote 计价，未计入）';
-      effEl.textContent = ethers.formatUnits(m.effectiveMargin, 6) + ' mUSDC';
+      // 服务端未配置 quote→USD 换算率：只如实展示链上读到的估值（quote 计价、18 位小数），
+      // 并说清"为什么没计入、要配什么才计入"，不假装已经算进保证金。
+      const zero = BigInt(m.rwaAccountValueQuote ?? '0') === 0n;
+      rwaEl.textContent = zero
+        ? `0 ${QUOTE_SYMBOL}（TWAP 窗口未就绪，按 0 计）`
+        : `${quoteText}（未计入保证金）`;
+      rwaEl.title = zero
+        ? '金库的 TWAP 窗口还没走完，合约按 0 估值（宁可低估，也不用可被操纵的瞬时价）；当前部署窗口 60 秒'
+        : `链上原始值 ${rawQuote} ${QUOTE_SYMBOL}（TWAP 定点数整数除法，末位截断属正常）。未计入是因为服务端没配 MARGIN_QUOTE_USD_PRICE`;
+      effEl.textContent = `${fmtAmount(m.effectiveMargin, 6, 'mUSDC')}（= Vault 余额，RWA 估值未并入）`;
     }
+    setState('chkRwa', m.rwaCounted
+      ? `已计入（${quoteText} → ${fmtAmount(m.rwaMarginValue, 6, 'mUSDC')}）`
+      : (m.rwaConfigured ? `只展示不计入（链上估值 ${quoteText}）` : '未配置 RWA 金库'),
+      m.rwaCounted ? '' : '要让 RWA 估值并入综合可用保证金，服务端需配置 MARGIN_QUOTE_USD_PRICE（quote 代币美元价）');
     if (m.sourceErrors && m.sourceErrors.length) log('保证金数据部分不可用: ' + m.sourceErrors.join('; '));
   } catch {}
 }
@@ -608,21 +771,27 @@ async function refreshRwa() {
     rwaDecimals = Number(await rwa.decimals());
     const walletBal = await rwa.balanceOf(account);
     const vaultBal = await mc.rawBalance(account, RWA_TOKEN);
-    document.getElementById('rwaWalletBal').textContent = ethers.formatUnits(walletBal, rwaDecimals) + ' SRT-RWA';
-    document.getElementById('rwaVaultBal').textContent = ethers.formatUnits(vaultBal, rwaDecimals) + ' SRT-RWA';
+    lastRwaWalletBalance = walletBal;
+    lastRwaVaultBalance = vaultBal;
+    document.getElementById('rwaWalletBal').textContent = fmtAmount(walletBal, rwaDecimals, 'SRT-RWA');
+    document.getElementById('rwaVaultBal').textContent = fmtAmount(vaultBal, rwaDecimals, 'SRT-RWA');
     document.getElementById('rwaDepositBtn').disabled = walletBal <= 0n;
+    document.getElementById('withdrawRwaBtn').disabled = vaultBal <= 0n;
     const src = document.getElementById('rwaValue');
-    document.getElementById('rwaValue2').textContent = src ? src.textContent : '-';
-    // 隐蔽自检：悄悄核对当前钱包是不是资产方（owner/持仓），结果只落在
-    // 账户区一行 10px 灰字 + 浏览器控制台里，演示画面上不展开、不弹窗。
+    const dst = document.getElementById('rwaValue2');
+    dst.textContent = src ? src.textContent : '-';
+    dst.title = src ? src.title : '';
+    // 账户角色提示：核对当前钱包是否是 RWA / 金库 owner 或持有 SRT-RWA。
+    // 这只说明"钱包关联什么资产"，不代表 RWA 已按美元换算、计入永续保证金，
+    // 因此页面上用清晰的角色名称，不再显示含糊的"就绪"状态。
     try {
       const [rwaOwner, mcOwner] = await Promise.all([rwa.owner(), mc.owner()]);
       const me = account.toLowerCase();
       const isAssetSide = me === rwaOwner.toLowerCase() || me === mcOwner.toLowerCase();
       const hint = document.getElementById('roleHint');
-      if (isAssetSide && walletBal > 0n) { hint.textContent = '● 就绪'; hint.style.color = '#3fb950'; }
-      else if (walletBal > 0n) { hint.textContent = '● 有持仓'; hint.style.color = '#d29922'; }
-      else if (isAssetSide) { hint.textContent = '● 资产方（无持仓）'; hint.style.color = '#d29922'; }
+      if (isAssetSide && walletBal > 0n) { hint.textContent = '● 资产方（持有 RWA）'; hint.style.color = '#3fb950'; }
+      else if (walletBal > 0n) { hint.textContent = '● 钱包持有 RWA'; hint.style.color = '#d29922'; }
+      else if (isAssetSide) { hint.textContent = '● 合约关联地址（钱包无 RWA）'; hint.style.color = '#d29922'; }
       else { hint.textContent = '● 普通账户'; hint.style.color = '#5c6670'; }
       console.info('[wallet-check]', { account, isAssetSide, rwaOwner, mcOwner, rwaBalance: walletBal.toString(), vaultRwa: vaultBal.toString() });
     } catch {}
@@ -646,7 +815,7 @@ document.getElementById('rwaDepositBtn').onclick = async () => {
     log('正在把 RWA 存入金库作为保证金…（请在钱包确认）');
     const depTx = await mc.deposit(RWA_TOKEN, amount);
     await depTx.wait();
-    log('RWA 存入完成，TWAP 窗口走完后估值将计入保证金', depTx.hash);
+    log('RWA 存入完成。TWAP 价格窗口就绪后可读取估值；是否计入永续综合保证金，还取决于服务端是否配置 quote→mUSDC 换算率。', depTx.hash);
     await refreshRwa();
     await refreshBalance();
     await refreshRwa();
@@ -657,44 +826,209 @@ document.getElementById('rwaDepositBtn').onclick = async () => {
   }
 };
 
+/**
+ * 推进 RWA 抵押品的 TWAP oracle。
+ * MultiCollateralVaultV2.deposit() 会“尽力”调用 pokeOracle，但如果存入时距离上次 checkpoint
+ * 还不到 60 秒，合约会静默返回 false；时间后来到了也不会自动更新（view 函数不会写链）。
+ * 所以需要用户在窗口到期后明确点一次：先 staticCall 预测窗口是否已到，未到不发交易/不耗 gas；
+ * 到期后再发一笔真实 Fuji 交易，随后重新读取 totalAccountValue。
+ */
+async function refreshRwaTwap() {
+  const btn = document.getElementById('refreshTwapBtn');
+  try {
+    btn.disabled = true;
+    if (!signer || !account) throw new Error('先连接持有 SRT-RWA 的钱包');
+    await ensureFujiNetwork();
+    const mc = new ethers.Contract(MC_VAULT_V2, MC_VAULT_ABI, signer);
+    const oracleAddress = await mc.oracles(RWA_TOKEN);
+    if (!oracleAddress || oracleAddress === ethers.ZeroAddress) {
+      throw new Error('该 RWA 尚未登记 TWAP oracle；请检查 Fuji 合约地址与 collateral 配置');
+    }
+    const oracle = new ethers.Contract(oracleAddress, TWAP_ORACLE_ABI, signer);
+    const [minPeriod, lastSnapshot, block] = await Promise.all([
+      oracle.minPeriod(),
+      oracle.blockTimestampLastSnapshot(),
+      signer.provider.getBlock('latest'),
+    ]);
+    let canUpdate = false;
+    try { canUpdate = await mc.pokeOracle.staticCall(RWA_TOKEN); }
+    catch (e) { throw new Error('预检 oracle 失败: ' + (e.shortMessage || e.message)); }
+    if (!canUpdate) {
+      const elapsed = block ? BigInt(block.timestamp) - BigInt(lastSnapshot) : 0n;
+      const remain = minPeriod > elapsed ? minPeriod - elapsed : 0n;
+      const value = lastMarginView?.rwaAccountValueQuote ?? '0';
+      if (BigInt(value) > 0n) {
+        log(`TWAP 已有估值 ${fmtAmount(value, 18, QUOTE_SYMBOL)}；下一窗口还需约 ${remain.toString()} 秒，不必重复点。`);
+      } else {
+        log(`TWAP 窗口尚未走完，约再等 ${remain.toString()} 秒后重试。未发链上交易，没有消耗 gas。`);
+      }
+      return;
+    }
+    log('TWAP 窗口已到，正在发送链上 oracle 更新…（请在钱包确认）');
+    const tx = await mc.pokeOracle(RWA_TOKEN);
+    const receipt = await tx.wait();
+    log('RWA TWAP oracle 已更新', receipt.hash);
+    await refreshBalance();
+    await refreshRwa();
+    const value = lastMarginView?.rwaAccountValueQuote ?? '0';
+    if (BigInt(value) > 0n) {
+      log(`链上 TWAP 折价估值现在为 ${fmtAmount(value, 18, QUOTE_SYMBOL)}；是否计入可用保证金见账户区标注。`);
+    } else {
+      log('Oracle 更新已上链，但估值仍为 0；可能是池子储备 / 价格方向 / 抵押配置不满足。点“一键自检”并检查日志，不要把 0 当成保证金。');
+    }
+  } catch (e) {
+    log('刷新 RWA TWAP 失败: ' + (e.shortMessage || e.message));
+  } finally { btn.disabled = false; }
+};
+document.getElementById('refreshTwapBtn').addEventListener('click', refreshRwaTwap);
+
 // ---------- 对冲测算：后端按保证金覆盖规则计算建议空单 ----------
 let lastHedgeQuote = null;
+function clearHedgeQuote() {
+  lastHedgeQuote = null;
+  for (const id of ['hedgeNotional', 'hedgeQty', 'hedgeMargin', 'hedgeCovered']) setState(id, '-');
+  setState('hedgeRefState', '尚未测算');
+  document.getElementById('hedgeFillBtn').disabled = true;
+}
+
+/** 参考价来源（与服务端 referencePrice.js 的 REF_PRICE_SOURCE_LABELS 对应） */
+const REF_SOURCE_LABELS = {
+  'explicit-input': '手动指定',
+  'local-demo-fallback': '浏览器演示兜底值（非市场数据）',
+  'external-feed': '外部喂价',
+  'trade-twap': '成交 TWAP',
+  'last-trade': '最新成交价（TWAP 样本不足时兜底）',
+  'book-best-ask': '盘口最优卖价',
+  'book-best-bid': '盘口最优买价',
+  'config-fallback': '服务端配置兜底值（非市场数据）',
+  'mark-oracle': '标记价预言机',
+};
+
+/** 参考价兜底：先用已知盘口，再主动拉一次 REST 盘口；都没有才用演示锚 2500（非市场数据） */
+async function pickFallbackRefPrice() {
+  if (latestBestBid) return { price: String(latestBestBid), source: 'book-best-bid', marketData: true };
+  if (latestBestAsk) return { price: String(latestBestAsk), source: 'book-best-ask', marketData: true };
+  try {
+    const res = await fetch(`${apiUrl}/orderbook`, { cache: 'no-store' });
+    if (res.ok) {
+      const book = await res.json();
+      renderBook(book);
+      if (latestBestBid) return { price: String(latestBestBid), source: 'book-best-bid', marketData: true };
+      if (latestBestAsk) return { price: String(latestBestAsk), source: 'book-best-ask', marketData: true };
+    }
+  } catch {}
+  return { price: DEFAULT_REF_PRICE, source: 'local-demo-fallback', marketData: false };
+}
+
+/** 参考价拿不到时，说清"缺哪几层、分别怎么补"，而不是只丢一句英文错误 */
+function explainMissingRefPrice(body, fallbackUsed) {
+  const lines = [];
+  const missing = Array.isArray(body?.missing) ? body.missing : [];
+  if (missing.length) {
+    for (const m of missing) lines.push(`· ${m.reason} → ${m.fix}`);
+  } else {
+    // 服务端还是旧版本（没有诊断字段）时，给出同样可执行的三条
+    lines.push('· 没有外部喂价 → 服务端设置 MARK_PRICE_FEED_URL');
+    lines.push('· 还没有成交、标记价 TWAP 无样本 → 先铺盘口并对敲几笔');
+    lines.push('· 盘口为空 → 运行 demo/seed_counterparty.mjs，或用下方“演示控制台”的【铺盘口】');
+  }
+  log(`参考价缺失：喂价 / 成交 TWAP / 盘口最优价三层都没有，已自动填入 ${fallbackUsed} 重试。补齐其中任一层即可：`);
+  for (const l of lines) log('  ' + l);
+}
+
+async function runHedgeQuote({ allowFallback = true } = {}) {
+  const assetValue = document.getElementById('hedgeAssetValue').value.trim();
+  const ratioPct = Number(document.getElementById('hedgeRatio').value.trim());
+  const refPrice = document.getElementById('hedgeRefPrice').value.trim();
+  const leverage = document.getElementById('leverage').value;
+  if (!/^\d+$/.test(assetValue) || BigInt(assetValue) <= 0n || !Number.isFinite(ratioPct) || ratioPct <= 0 || ratioPct > 100) {
+    throw new Error('资产估值须为正整数、对冲比例须在 (0,100]');
+  }
+  const build = (ref) => {
+    const params = new URLSearchParams({
+      address: account, assetValue, hedgeRatioBps: String(Math.round(ratioPct * 100)), leverage,
+    });
+    if (ref) params.set('referencePrice', ref);
+    return `${apiUrl}/hedge/quote?${params}`;
+  };
+
+  let res = await fetch(build(refPrice));
+  let q = await res.json();
+  if (!res.ok) {
+    const refMissing = res.status === 503 || /reference price/i.test(String(q.error || ''));
+    if (!refMissing || !allowFallback) throw new Error(q.error || `HTTP ${res.status}`);
+    const fallback = await pickFallbackRefPrice();
+    explainMissingRefPrice(q, fallback.price);
+    // 仅在本次请求里提供兜底值，不写进输入框：否则下一次点击会把旧 fallback
+    // 当成用户手填的真实参考价，今后盘口更新了也不再自动跟随市场数据。
+    res = await fetch(build(fallback.price));
+    q = await res.json();
+    if (!res.ok) throw new Error(q.error || `HTTP ${res.status}`);
+    q.referencePriceSource = fallback.source;
+    q.referencePriceSourceLabel = REF_SOURCE_LABELS[fallback.source];
+    q.referencePriceIsMarketData = fallback.marketData;
+  }
+  return q;
+}
+
+function renderHedgeQuote(q) {
+  lastHedgeQuote = q;
+  const required = BigInt(q.requiredMargin);
+  const available = BigInt(q.availableMargin);
+  const sourceLabel = REF_SOURCE_LABELS[q.referencePriceSource] || q.referencePriceSourceLabel || '服务端标记价口径';
+  setState('hedgeNotional', fmtEngineMoney(q.notional), '对冲名义 = 资产估值 × 对冲比例');
+  // 数量保持纯数字：引导第 5 步的完成检测读的就是这一格
+  document.getElementById('hedgeQty').textContent = q.quantity;
+  document.getElementById('hedgeQty').title = `名义 ${q.notional} ÷ 参考价 ${q.referencePrice}，向下取整（宁可少对冲，不超额开仓）`;
+  setState('hedgeMargin', `${fmtEngineMoney(required)} / ${fmtEngineMoney(available)}`,
+    `占用 = 名义 ÷ 杠杆（${q.leverage}x）；可用 = 综合保证金（Vault mUSDC${q.margin?.rwaCounted ? ' + RWA 估值' : '，RWA 估值未计入'}）`);
+  setState('hedgeCovered', q.covered
+    ? `✓ 足够覆盖，余量 ${fmtAmount(available - required, 6, 'mUSDC')}`
+    : `✗ 不足，缺 ${fmtEngineMoney(q.shortfall)}`,
+    q.covered ? '' : '三条路：调低“想对冲的资产估值”、调高杠杆、或再存保证金');
+  if (!q.covered) {
+    // 保证金不足时给出可执行的下一步，而不是只留一个缺口数字
+    const suggested = (available * BigInt(q.leverage)) / (BigInt(q.hedgeRatioBps) || 10000n);
+    log(`对冲测算: 保证金不足（需 ${q.requiredMargin}，可用 ${q.availableMargin}）。` +
+        `当前 ${q.leverage}x 杠杆下最多对冲资产估值约 ${suggested > 0n ? suggested.toString() : '0'}，或调高杠杆/追加保证金。`);
+  }
+  setState('hedgeRefState', `${q.referencePrice} · 来源：${sourceLabel}${q.referencePriceIsMarketData === false ? '（非市场数据）' : ''}`,
+    q.referencePriceIsMarketData === false
+      ? '这个参考价不是从喂价/盘口/成交读出来的：铺盘口或产生一笔成交后，来源会自动变成市场数据'
+      : '参考价来自实时市场数据');
+  document.getElementById('hedgeFillBtn').disabled = BigInt(q.quantity) <= 0n;
+  if (!q.covered) document.getElementById('hedgeCovered').style.color = '#d29922';
+  else document.getElementById('hedgeCovered').style.color = '#3fb950';
+  log(`对冲测算: 名义 ${q.notional}（≈ ${fmtAmount(q.notional, 6, 'mUSDC')}），建议空单 ${q.quantity}，` +
+      `参考价 ${q.referencePrice}（${sourceLabel}），占用 ${q.requiredMargin} / 可用 ${q.availableMargin}，覆盖=${q.covered ? '是' : '否'}`);
+}
+
 document.getElementById('hedgeQuoteBtn').onclick = async () => {
   const btn = document.getElementById('hedgeQuoteBtn');
   try {
     btn.disabled = true;
-    const assetValue = document.getElementById('hedgeAssetValue').value.trim();
-    const ratioPct = Number(document.getElementById('hedgeRatio').value.trim());
-    const refPrice = document.getElementById('hedgeRefPrice').value.trim();
-    const leverage = document.getElementById('leverage').value;
-    if (!/^\d+$/.test(assetValue) || !Number.isFinite(ratioPct) || ratioPct <= 0 || ratioPct > 100) {
-      log('对冲测算失败: 资产估值须为正整数、对冲比例须在 (0,100]'); return;
-    }
-    const params = new URLSearchParams({
-      address: account, assetValue, hedgeRatioBps: String(Math.round(ratioPct * 100)), leverage,
-    });
-    if (refPrice) params.set('referencePrice', refPrice);
-    const res = await fetch(`${apiUrl}/hedge/quote?${params}`);
-    const q = await res.json();
-    if (!res.ok) throw new Error(q.error || `HTTP ${res.status}`);
-    lastHedgeQuote = q;
-    document.getElementById('hedgeNotional').textContent = q.notional;
-    document.getElementById('hedgeQty').textContent = q.quantity;
-    document.getElementById('hedgeMargin').textContent = `${q.requiredMargin} / ${q.availableMargin}`;
-    document.getElementById('hedgeCovered').textContent = q.covered ? '足够覆盖' : `不足，缺 ${q.shortfall}`;
-    document.getElementById('hedgeFillBtn').disabled = BigInt(q.quantity) <= 0n;
-    log(`对冲测算: 名义 ${q.notional}，建议空单 ${q.quantity} @参考价 ${q.referencePrice}，保证金覆盖=${q.covered}`);
+    clearHedgeQuote();
+    renderHedgeQuote(await runHedgeQuote());
   } catch (e) { log('对冲测算失败: ' + e.message); }
   finally { btn.disabled = false; }
 };
 
 document.getElementById('hedgeFillBtn').onclick = () => {
   if (!lastHedgeQuote) return;
+  // 限价用盘口最优买价（有盘口时）而不是参考价：参考价可能是兜底值 2500，
+  // 而买盘挂在 2499，用 2500 挂卖单会停在盘口上不成交，第 6/7 步就没有仓位和链上凭证。
+  const marketable = latestBestBid ? String(latestBestBid) : lastHedgeQuote.referencePrice;
   document.getElementById('side').value = 'sell';
   document.getElementById('orderType').value = 'limit'; syncOrderType();
-  document.getElementById('price').value = lastHedgeQuote.referencePrice;
+  document.getElementById('price').value = marketable;
   document.getElementById('quantity').value = lastHedgeQuote.quantity;
-  log('已按对冲测算填入空单，请确认后点击“下单”');
+  log(`已按对冲测算填入空单：卖出 ${lastHedgeQuote.quantity} @ ${marketable}` +
+      (latestBestBid && marketable !== lastHedgeQuote.referencePrice
+        ? `（按盘口最优买价成交，测算参考价是 ${lastHedgeQuote.referencePrice}）`
+        : '') + '，确认后点“下单”');
+  if (!latestBestBid && !latestBestAsk) {
+    log('当前盘口为空：这笔限价空单会挂单等待，不会立即成交。要验证成交与 Snowtrace 结算，请先在演示控制台铺双边盘口或运行 demo/seed_counterparty.mjs。');
+  }
 };
 
 function connectWs() {
@@ -709,7 +1043,10 @@ function connectWs() {
     if (type === 'position_update') renderPosition(payload);
     if (type === 'funding') { log(`资金费结算: ${payload.rateBps} bps`); refreshPosition(); }
     if (type === 'liquidated') { log('⚠️ 仓位已被强平: ' + JSON.stringify(payload)); refreshPosition(); refreshBalance(); }
-    if (type === 'settled') { log('链上结算完成，tx: ' + payload.txHash, payload.txHash); refreshBalance(); }
+    if (type === 'settled') {
+      log('链上结算完成，tx: ' + payload.txHash, payload.txHash);
+      await Promise.all([refreshBalance(), refreshTrades()]);
+    }
     if (type === 'settlement_failed') {
       log('链上结算失败（成交已在链下撮合，但未上链）: ' + payload.error +
           '。常见原因是买方 Vault 保证金余额不足，可先领取 mUSDC 并存入保证金后重试。');
@@ -1039,6 +1376,288 @@ document.getElementById('placeOrderBtn').onclick = async () => {
 // 打开页面就在后台唤醒并持续监测后端（免费层休眠唤醒需要时间），等用户连钱包时通常已经就绪
 
 // ===============================================================
+// 演示控制台：自检（还差什么）+ 一键重跑（全部重试）+ 链上提回（真正从零再来）
+// 设计原则：每个按钮都说清"它改了什么、不改什么"；服务端旧版本没有对应端点时
+// 给可执行的替代动作（跑哪个脚本 / 配哪个环境变量），不抛一句英文错误了事。
+// ===============================================================
+function apiBase() { return apiUrl || readApiUrl(); }
+
+function adminToken() {
+  const el = document.getElementById('adminToken');
+  return el ? el.value.trim() : '';
+}
+
+async function apiJson(path, options = {}, timeoutMs = 30000) {
+  const res = await fetchWithTimeout(`${apiBase()}${path}`, { cache: 'no-store', ...options }, timeoutMs);
+  let body = null;
+  try { body = await res.json(); } catch {}
+  return { status: res.status, body };
+}
+
+function renderChecks(s) {
+  const refEl = document.getElementById('chkRefPrice');
+  const bookEl = document.getElementById('chkBook');
+  const settleEl = document.getElementById('chkSettlement');
+  let refText = '-', refColor = '#9aa4af', refTitle = '';
+  if (s.referencePrice) {
+    const label = REF_SOURCE_LABELS[s.referencePrice.source] || s.referencePrice.source;
+    refText = `${s.referencePrice.price} · 来源：${label}${s.referencePrice.marketData ? '' : '（非市场数据）'}`;
+    refColor = s.referencePrice.marketData ? '#3fb950' : '#d29922';
+    refTitle = s.referencePrice.marketData
+      ? '参考价来自实时市场数据（喂价 / 成交 TWAP / 盘口最优价）'
+      : '这是兜底参考价，不是市场数据：铺盘口或产生一笔成交后来源会自动变成市场数据';
+  } else if (s.mark) {
+    refText = `标记价 ${s.mark.price}（来源：${REF_SOURCE_LABELS[s.mark.source] || s.mark.source}）`;
+    refColor = '#3fb950';
+  } else {
+    refText = '拿不到（喂价 / 成交 TWAP / 盘口 / 兜底值全空）';
+    refColor = '#E84142';
+    refTitle = '铺盘口（演示控制台 → 铺盘口，或 demo/seed_counterparty.mjs）、产生一笔成交，或在“参考价格”里手填一个价';
+  }
+  refEl.textContent = refText;
+  refEl.style.color = refColor;
+  // 同一份状态也写进对冲面板：点“计算对冲仓位”之前就知道参考价从哪来
+  setState('hedgeRefState', s.referencePrice || s.mark ? refText : '暂无 — 点“计算对冲仓位”会自动填一个可用的参考价并说明怎么补齐', refTitle);
+  document.getElementById('hedgeRefState').style.color = refColor;
+  const bids = s.book?.bids?.length ?? 0, asks = s.book?.asks?.length ?? 0;
+  bookEl.textContent = bids || asks
+    ? `买 ${bids} 档 / 卖 ${asks} 档，最优 ${s.book.bestBid ?? '-'} × ${s.book.bestAsk ?? '-'}`
+    : '空盘口 — 对冲单不会成交，先铺盘口';
+  bookEl.style.color = (bids && asks) ? '#3fb950' : '#E84142';
+  settleEl.textContent = s.settlement?.enabled
+    ? `已开启（${s.settlement.version}，Vault ${shortAddr(s.settlement.vault)}）`
+    : '未开启（服务端没配 VAULT_ADDRESS / OPERATOR_PRIVATE_KEY）';
+  settleEl.style.color = s.settlement?.enabled ? '#3fb950' : '#E84142';
+
+  const list = document.getElementById('chkList');
+  list.innerHTML = '';
+  for (const c of (s.checks || [])) {
+    const row = document.createElement('div');
+    row.style.color = c.ok ? '#9aa4af' : (c.required ? '#d29922' : '#68717b');
+    const icon = c.ok ? '✓' : (c.required ? '!' : '·');
+    const kind = c.required ? '' : '（可選 / 進階）';
+    row.textContent = `${icon} ${c.label}${kind} — ${c.detail}`;
+    if (!c.ok && c.fix) {
+      const fix = document.createElement('div');
+      fix.style.color = '#5c6670';
+      fix.style.paddingLeft = '16px';
+      fix.textContent = `怎么补：${c.fix}`;
+      row.appendChild(fix);
+    }
+    list.appendChild(row);
+  }
+  return s;
+}
+
+async function selfCheck({ quiet = false } = {}) {
+  try {
+    const { status, body } = await apiJson('/demo/status');
+    if (status !== 200 || !body || !Array.isArray(body.checks)) {
+      // 旧版本服务端没有这个端点：退回 /health，仍然给出可用的判断
+      const h = await apiJson('/health');
+      if (!quiet) log(`自检：服务端没有 /demo/status（可能是旧版本），/health = ${JSON.stringify(h.body)}`);
+      setState('chkRefPrice', '需要升级服务端才有完整自检', '部署最新 server/src/index.js 后可用 GET /demo/status');
+      return null;
+    }
+    renderChecks(body);
+    const required = body.checks.filter((c) => c.required);
+    const missingCore = required.filter((c) => !c.ok);
+    const optionalMissing = body.checks.filter((c) => !c.ok && !c.required);
+    if (!quiet) {
+      log(`自检完成：核心演示主线 ${required.length - missingCore.length}/${required.length} 项就绪` +
+          (missingCore.length ? `，先补：${missingCore.map((c) => c.label).join('、')}` : '，撮合与链上结算前提已满足') +
+          (optionalMissing.length ? `；另有 ${optionalMissing.length} 项可选/进阶配置未启用` : ''));
+    }
+    return body;
+  } catch (e) {
+    if (!quiet) log('自检失败: ' + e.message);
+    return null;
+  }
+}
+
+async function refreshAll({ quiet = false } = {}) {
+  if (!quiet) log('正在刷新链上与服务端数据…');
+  try {
+    const { status, body } = await apiJson('/orderbook');
+    if (status === 200 && body) renderBook(body);
+  } catch {}
+  await refreshTrades().catch(() => {});
+  if (account) {
+    await Promise.all([
+      refreshBalance().catch(() => {}),
+      refreshRwa().catch(() => {}),
+      refreshMyOrders().catch(() => {}),
+      refreshPosition().catch(() => {}),
+    ]);
+  }
+  await selfCheck({ quiet: true });
+  if (!quiet) log('刷新完成');
+}
+
+async function seedBook({ quiet = false } = {}) {
+  const token = adminToken();
+  try {
+    const { status, body } = await apiJson('/admin/seed-book', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { 'x-admin-token': token } : {}) },
+      body: JSON.stringify({}),
+    });
+    if (status === 200 && body?.ok) {
+      if (!quiet) log(`已铺演示盘口：${body.placed} 笔挂单，最优 ${body.bestBid ?? '-'} × ${body.bestAsk ?? '-'}，做市钱包 ${shortAddr(body.maker)}`);
+      if (body.makerVaultBalance !== null && body.makerVaultBalance !== undefined && BigInt(body.makerVaultBalance) <= 0n) {
+        log('⚠️ 做市钱包在 Vault 里没有保证金：成交能撮合，但链上结算会失败（拿不到 Snowtrace 哈希）。先跑 demo/fund_demo_maker.mjs 给它存 mUSDC。');
+      }
+      for (const w of (body.warnings || [])) log('铺盘口提示: ' + w);
+      return true;
+    }
+    if (status === 501) {
+      if (!quiet) log('服务端没有配置做市钱包（DEMO_MAKER_PRIVATE_KEY）。改用本地脚本铺盘口：' +
+          'export DEMO_TRADER_A_KEY=… DEMO_TRADER_B_KEY=… && API_URL=' + apiBase() + ' node task7-perp-dex/demo/seed_counterparty.mjs');
+      return false;
+    }
+    if (status === 401 || status === 403) {
+      if (!quiet) log('铺盘口被拒：需要在“演示控制台”里填管理员令牌（ADMIN_RESET_TOKEN）');
+      return false;
+    }
+    if (status === 404) {
+      if (!quiet) log('服务端没有 /admin/seed-book（旧版本）。请用本地脚本 demo/seed_counterparty.mjs 铺盘口，或在“参考价格”里手填一个价。');
+      return false;
+    }
+    if (!quiet) log('铺盘口失败: ' + JSON.stringify(body || status));
+    return false;
+  } catch (e) {
+    if (!quiet) log('铺盘口失败: ' + e.message);
+    return false;
+  }
+}
+
+async function resetDemo({ quiet = false } = {}) {
+  const token = adminToken();
+  if (!token) {
+    if (!quiet) log('清空服务端演示状态需要管理员令牌：在“演示控制台”里填入 ADMIN_RESET_TOKEN（服务端未配置该令牌时此功能被禁用）');
+    return false;
+  }
+  if (!quiet && !window.confirm('清空服务端演示状态会删除所有账户的挂单、成交记录和未平仓位（链上余额不会动）。确定继续？')) return false;
+  try {
+    const { status, body } = await apiJson('/admin/reset-demo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-token': token },
+      body: JSON.stringify({}),
+    });
+    if (status === 200) {
+      if (!quiet) log('服务端演示状态已清空（订单簿 / 仓位 / 成交 / 标记价样本 / 保险基金）。链上余额不受影响——那是不可逆的链上状态。');
+      seenTradeIds.clear();
+      priceHistory.length = 0;
+      drawPriceChart();
+      clearHedgeQuote();
+      document.getElementById('price').value = '';
+      document.getElementById('quantity').value = '';
+      if (!quiet) await refreshAll({ quiet: true });
+      return true;
+    }
+    if (!quiet) log(`清空失败（HTTP ${status}）: ${JSON.stringify(body)}` +
+        (status === 403 ? ' — 服务端没配 ADMIN_RESET_TOKEN，该端点被禁用' : status === 401 ? ' — 令牌不对' : ''));
+    return false;
+  } catch (e) {
+    if (!quiet) log('清空失败: ' + e.message);
+    return false;
+  }
+}
+
+/** “全部重跑”：清空服务端状态 → 重新铺盘口 → 刷新读数 → 引导回到第 1 步。链上余额不动。 */
+async function replayAll() {
+  const btn = document.getElementById('replayAllBtn');
+  if (!window.confirm('全部重跑会清空服务端所有账户的订单、成交与未平仓位，然后重新铺盘。链上余额不变。建议先确认没人还在演示，继续吗？')) return;
+  try {
+    btn.disabled = true;
+    log('=== 全部重跑开始 ===');
+    const reset = await resetDemo({ quiet: true });
+    log(reset ? '① 服务端状态已清空' : '① 跳过清空（没有管理员令牌或服务端未开启）');
+    const seeded = await seedBook({ quiet: true });
+    log(seeded ? '② 演示盘口已重新铺好' : '② 未能铺盘口 — 用本地脚本 demo/seed_counterparty.mjs，或在“参考价格”手填一个价');
+    await refreshAll({ quiet: true });
+    log('③ 链上与服务端读数已刷新');
+    tourStart();
+    log('④ 引导已回到第 1 步。想连链上存款也从头来：用“提回 mUSDC / 提回 RWA”把钱取回钱包，再按引导重新存一次。');
+    log('=== 全部重跑结束 ===');
+  } finally { btn.disabled = false; }
+}
+
+/** 不让“重新从零做”误删风险状态：先平掉当前撮合服务中的净仓位，再允许提回保证金。 */
+async function requireFlatPosition() {
+  if (!account) throw new Error('先连接钱包');
+  const res = await fetch(`${apiBase()}/positions/${account}`, { cache: 'no-store' });
+  const p = await res.json();
+  if (!res.ok) throw new Error(p.error || `读取当前仓位失败 HTTP ${res.status}`);
+  if (BigInt(p.sizeSigned || '0') !== 0n) {
+    throw new Error(`当前还有 ${p.sizeSigned} 单位净仓位。请先在“我的仓位”点“平仓”，确认成交后再提保证金/抵押品。`);
+  }
+}
+
+/** 链上提回 mUSDC 保证金（VaultV2.withdraw）——让"重新做一遍"真的能从零开始 */
+async function withdrawUsdc() {
+  const btn = document.getElementById('withdrawUsdcBtn');
+  try {
+    btn.disabled = true;
+    await requireFlatPosition();
+    await ensureFujiNetwork();
+    const vault = new ethers.Contract(VAULT_V2, VAULT_ABI, signer);
+    const raw = document.getElementById('withdrawUsdc').value.trim();
+    const bal = await vault.balanceOf(account);
+    const amount = raw ? ethers.parseUnits(raw, 6) : bal;
+    if (amount <= 0n) { log('提回 mUSDC: 余额为 0，无需提回'); return; }
+    if (amount > bal) { log(`提回 mUSDC 失败: 想提 ${ethers.formatUnits(amount, 6)}，链上只有 ${ethers.formatUnits(bal, 6)}`); return; }
+    log(`正在从 VaultV2 提回 ${ethers.formatUnits(amount, 6)} mUSDC…（请在钱包确认）`);
+    const tx = await vault.withdraw(amount);
+    const r = await tx.wait();
+    log('mUSDC 提回完成，现在可以重新走一遍存入流程', r.hash);
+    await refreshBalance();
+  } catch (e) {
+    log('提回 mUSDC 失败: ' + (e.shortMessage || e.message));
+  } finally { btn.disabled = false; }
+}
+
+/** 链上提回 RWA 抵押（MultiCollateralVaultV2.withdraw）——抵押品随时可取，这正是它能当保证金的前提 */
+async function withdrawRwa() {
+  const btn = document.getElementById('withdrawRwaBtn');
+  try {
+    btn.disabled = true;
+    await requireFlatPosition();
+    await ensureFujiNetwork();
+    const mc = new ethers.Contract(MC_VAULT_V2, MC_VAULT_ABI, signer);
+    const raw = document.getElementById('withdrawRwa').value.trim();
+    const bal = await mc.rawBalance(account, RWA_TOKEN);
+    const amount = raw ? ethers.parseUnits(raw, rwaDecimals) : bal;
+    if (amount <= 0n) { log('提回 RWA: 金库里没有你的抵押，无需提回'); return; }
+    if (amount > bal) { log(`提回 RWA 失败: 想提 ${ethers.formatUnits(amount, rwaDecimals)}，金库里只有 ${ethers.formatUnits(bal, rwaDecimals)}`); return; }
+    log(`正在从 MultiCollateralVaultV2 提回 ${ethers.formatUnits(amount, rwaDecimals)} SRT-RWA…（请在钱包确认）`);
+    const tx = await mc.withdraw(RWA_TOKEN, amount);
+    const r = await tx.wait();
+    log('RWA 提回完成，现在可以重新走一遍存入流程（估值会重新等一个 TWAP 窗口）', r.hash);
+    await refreshRwa();
+    await refreshBalance();
+  } catch (e) {
+    log('提回 RWA 失败: ' + (e.shortMessage || e.message));
+  } finally { btn.disabled = false; }
+}
+
+document.getElementById('selfCheckBtn').addEventListener('click', () => selfCheck());
+document.getElementById('refreshAllBtn').addEventListener('click', () => refreshAll());
+document.getElementById('seedBookBtn').addEventListener('click', () => seedBook());
+document.getElementById('resetDemoBtn').addEventListener('click', () => resetDemo());
+document.getElementById('replayAllBtn').addEventListener('click', replayAll);
+document.getElementById('withdrawUsdcBtn').addEventListener('click', withdrawUsdc);
+document.getElementById('withdrawRwaBtn').addEventListener('click', withdrawRwa);
+{
+  const tokenEl = document.getElementById('adminToken');
+  tokenEl.value = localStorage.getItem('avavault-admin-token') || '';
+  tokenEl.addEventListener('change', () => {
+    localStorage.setItem('avavault-admin-token', tokenEl.value.trim());
+    log('管理员令牌已保存在本机浏览器（不会上传，只在调用清空/铺盘口时作为请求头发出）');
+  });
+}
+
+// ===============================================================
 // 新手引导 + 三语切换（简体/繁體/English）
 // 设计原则：引导只做"高亮 + 讲解 + 检测"，绝不代替用户点任何按钮、
 // 绝不发交易；每一步都能手动跳过，元素不存在时自动跳过该步，
@@ -1050,38 +1669,38 @@ const TOUR_STEPS = [
   { target: '#apiStatus',
     title: {'zh-CN':'第 1 步 · 等后端醒来','zh-TW':'第 1 步 · 等後端醒來',en:'Step 1 · Wake the backend'},
     body: {'zh-CN':'页面打开后会自动唤醒后端（免费服务休眠时约需 30–60 秒）。等右上角 API 指示灯变绿再继续，不用刷新页面。','zh-TW':'頁面打開後會自動喚醒後端（免費服務休眠時約需 30–60 秒）。等右上角 API 指示燈變綠再繼續，不用重新整理頁面。',en:'The page wakes the backend automatically (free tier may need 30–60s). Wait until the API pill turns green — no refresh needed.'},
-    say: {'zh-CN':'我们先等后端就绪——所有数据都是实时的，不是一张截图。','zh-TW':'我們先等後端就緒——所有數據都是即時的，不是一張截圖。',en:'First, the backend wakes up — everything you will see is live, not a screenshot.'},
+    say: {'zh-CN':'页面就绪后，我会分别说明 Fuji 链上数据、撮合服务数据和配置兜底值各自来自哪里，不把测试数据包装成真实行情。','zh-TW':'頁面就緒後，我會分別說明 Fuji 鏈上資料、撮合服務資料和配置兜底值各自來自哪裡，不把測試資料包裝成真實行情。',en:'Once ready, I will distinguish Fuji on-chain data, matching-service data and configured fallbacks rather than presenting test values as real market prices.'},
     done: () => apiReady },
   { target: '#connectBtn',
-    title: {'zh-CN':'第 2 步 · 连接房东钱包','zh-TW':'第 2 步 · 連接房東錢包',en:'Step 2 · Connect the owner wallet'},
-    body: {'zh-CN':'点击“连接钱包并登录”，选房东账户（持有 RWA 的那个），在钱包里确认切到 Fuji 网络并签名登录。','zh-TW':'點擊「連接錢包並登入」，選房東帳戶（持有 RWA 的那個），在錢包裡確認切到 Fuji 網路並簽名登入。',en:'Click “Connect & Login”, pick the wallet that holds the RWA, confirm Fuji network and sign the login message.'},
-    say: {'zh-CN':'这位持有人有一份正在出租的链上房产，他只担心一件事：房价下跌。','zh-TW':'這位持有人有一份正在出租的鏈上房產，他只擔心一件事：房價下跌。',en:'Our holder owns a rented on-chain property. His only worry: its price falling.'},
+    title: {'zh-CN':'第 2 步 · 连接 RWA 持有者钱包','zh-TW':'第 2 步 · 連接 RWA 持有者錢包',en:'Step 2 · Connect the RWA holder wallet'},
+    body: {'zh-CN':'点击“连接钱包并登录”，选持有 SRT-RWA 的 Fuji 测试钱包。钱包只签一条登录消息，不会转币；要存取资产时才会单独弹出交易确认。','zh-TW':'點擊「連接錢包並登入」，選持有 SRT-RWA 的 Fuji 測試錢包。錢包只簽一條登入訊息，不會轉幣；要存取資產時才會單獨彈出交易確認。',en:'Click “Connect & Login” and choose the Fuji test wallet holding SRT-RWA. Login signs a message only; it does not transfer funds. Asset actions prompt separately.'},
+    say: {'zh-CN':'这是一个 Avalanche Fuji 测试网原型。屏幕上的 SRT-RWA 是演示代币；我会展示抵押、估值与对冲的技术路径，不把它说成已经发行的真实房产份额。','zh-TW':'這是一個 Avalanche Fuji 測試網原型。畫面上的 SRT-RWA 是演示代幣；我會展示抵押、估值與對沖的技術路徑，不把它說成已經發行的真實房產份額。',en:'This is an Avalanche Fuji testnet prototype. SRT-RWA is a demo token; I will show the collateral, valuation and hedge flow, not claim it is an issued real-estate share.'},
     done: () => !!account },
   { target: '#depositBtn',
     title: {'zh-CN':'第 3 步 · 存入稳定币保证金','zh-TW':'第 3 步 · 存入穩定幣保證金',en:'Step 3 · Deposit stablecoin margin'},
     body: {'zh-CN':'点“一键领取并存入 1,000 mUSDC”。会依次弹出领取、授权、存入三笔钱包确认，都点确认。','zh-TW':'點「一鍵領取並存入 1,000 mUSDC」。會依次彈出領取、授權、存入三筆錢包確認，都點確認。',en:'Click deposit to claim & deposit 1,000 mUSDC. Confirm the three wallet prompts (claim, approve, deposit).'},
-    say: {'zh-CN':'先放日常用的稳定币保证金进来——这部分谁都懂，重点在下一步。','zh-TW':'先放日常用的穩定幣保證金進來——這部分誰都懂，重點在下一步。',en:'First the everyday stablecoin margin goes in — the interesting part is next.'},
-    done: () => { const e=document.getElementById('vaultBalance'); return e && !/^-|^\(/.test(e.textContent) && !/ 0 mUSDC/.test(e.textContent); } },
+    say: {'zh-CN':'这一步领取并存入的是 Fuji 上的测试 mUSDC；它只用于证明结算额度路径，不是真实美元存款。','zh-TW':'這一步領取並存入的是 Fuji 上的測試 mUSDC；它只用於證明結算額度路徑，不是真實美元存款。',en:'This step claims and deposits test mUSDC on Fuji. It demonstrates the settlement-margin flow, not a real dollar deposit.'},
+    done: () => lastVaultBalance !== null && lastVaultBalance > 0n },
   { target: '#rwaDepositBtn',
-    title: {'zh-CN':'第 4 步 · 把房子存进金库（核心）','zh-TW':'第 4 步 · 把房子存進金庫（核心）',en:'Step 4 · Deposit the property (core)'},
-    body: {'zh-CN':'在“RWA 抵押”面板点“授权并存入 RWA”。估值刚开始可能是 0，等约一分钟 TWAP 窗口走完，数字会自己出现——这是故意的。','zh-TW':'在「RWA 抵押」面板點「授權並存入 RWA」。估值剛開始可能是 0，等約一分鐘 TWAP 窗口走完，數字會自己出現——這是故意的。',en:'In the RWA panel, approve & deposit the RWA. Its value may show 0 for about a minute until the TWAP window warms up — that is by design.'},
-    say: {'zh-CN':'他不卖房、不借钱：房子直接躺进金库继续生息。金库不靠人报价，自己去链上池子读 TWAP 均价再打七折——池子很薄，所以风控必须保守。','zh-TW':'他不賣房、不借錢：房子直接躺進金庫繼續生息。金庫不靠人報價，自己去鏈上池子讀 TWAP 均價再打七折——池子很薄，所以風控必須保守。',en:'No selling, no borrowing: the property sits in the vault still earning rent. The vault prices it itself from the on-chain TWAP with a 30% haircut.'},
-    done: () => { const e=document.getElementById('rwaVaultBal'); return e && !/^-/.test(e.textContent) && !/^0(\.0+)? /.test(e.textContent); } },
+    title: {'zh-CN':'第 4 步 · 存入 RWA 测试抵押品','zh-TW':'第 4 步 · 存入 RWA 測試抵押品',en:'Step 4 · Deposit the RWA test collateral'},
+    body: {'zh-CN':'在“RWA 抵押”面板授权并存入 SRT-RWA。TWAP 最短窗口是 60 秒；如果估值仍为 0，等窗口到期后点“推进 TWAP 并刷新估值”，这会发一笔更新 oracle 的 Fuji 交易。页面会明确显示估值单位和是否真的计入 mUSDC 保证金。','zh-TW':'在「RWA 抵押」面板授權並存入 SRT-RWA。TWAP 最短窗口是 60 秒；如果估值仍為 0，等窗口到期後點「推進 TWAP 並重新整理估值」，這會發一筆更新 oracle 的 Fuji 交易。頁面會明確顯示估值單位和是否真的計入 mUSDC 保證金。',en:'Approve and deposit SRT-RWA in the collateral panel. The TWAP minimum window is 60 seconds. If value is still zero after waiting, click “Poke TWAP & refresh valuation” to send an on-chain Fuji update. The UI shows both the quote unit and whether it is actually counted as mUSDC margin.'},
+    say: {'zh-CN':'这里展示的是链上抵押与 TWAP 估值机制。当前数值以 WAVAX 计价；只有配置了安全的 quote→mUSDC 换算，才会进入永续的综合可用保证金。','zh-TW':'這裡展示的是鏈上抵押與 TWAP 估值機制。當前數值以 WAVAX 計價；只有配置了安全的 quote→mUSDC 換算，才會進入永續的綜合可用保證金。',en:'This shows on-chain collateral and TWAP valuation. The current value is denominated in WAVAX; it counts toward perpetual margin only after a safe quote-to-mUSDC conversion is configured.'},
+    done: () => lastRwaVaultBalance !== null && lastRwaVaultBalance > 0n && BigInt(lastMarginView?.rwaAccountValueQuote ?? '0') > 0n },
   { target: '#hedgeQuoteBtn',
     title: {'zh-CN':'第 5 步 · 算对冲要开多大','zh-TW':'第 5 步 · 算對沖要開多大',en:'Step 5 · Size the hedge'},
-    body: {'zh-CN':'在“对冲测算”面板点“计算对冲仓位”（默认按资产估值 100% 对冲），看名义价值和保证金是否覆盖，再点“按测算填入空单”。','zh-TW':'在「對沖測算」面板點「計算對沖倉位」（預設按資產估值 100% 對沖），看名義價值和保證金是否覆蓋，再點「按測算填入空單」。',en:'In the hedge panel, compute the hedge (100% of asset value by default), check margin coverage, then fill the short order.'},
+    body: {'zh-CN':'在“对冲测算”面板点“计算对冲仓位”（默认按资产估值 100% 对冲），看名义价值、保证金是否覆盖、以及“参考价来源”那一行。如果盘口刚被清空、参考价拿不到，页面会自动填一个可用值重试，并列出缺哪一层、怎么补，不会停在一句英文报错上。','zh-TW':'在「對沖測算」面板點「計算對沖倉位」（預設按資產估值 100% 對沖），看名義價值、保證金是否覆蓋、以及「參考價來源」那一行。如果盤口剛被清空、參考價拿不到，頁面會自動填一個可用值重試，並列出缺哪一層、怎麼補，不會停在一句英文報錯上。',en:'In the hedge panel, compute the hedge (100% of asset value by default) and check the notional, margin coverage and the reference-price source. If the book was just cleared and no reference price exists, the page fills in a usable one, retries, and lists exactly which layer is missing and how to fix it.'},
     say: {'zh-CN':'对冲不是随手开一单：开多大，是拿他的资产估值和对冲比例算出来的。','zh-TW':'對沖不是隨手開一單：開多大，是拿他的資產估值和對沖比例算出來的。',en:'A hedge is not a random order — its size is computed from his asset value and hedge ratio.'},
     done: () => { const e=document.getElementById('hedgeQty'); return e && !/^-/.test(e.textContent) && e.textContent !== '0'; } },
   { target: '#placeOrderBtn',
     title: {'zh-CN':'第 6 步 · 下单对冲','zh-TW':'第 6 步 · 下單對沖',en:'Step 6 · Place the hedge order'},
-    body: {'zh-CN':'确认下单区已是卖出方向、数量来自测算，点“下单”。盘口有对手单时会立刻成交，仓位面板随即出现仓位和强平价。','zh-TW':'確認下單區已是賣出方向、數量來自測算，點「下單」。盤口有對手單時會立刻成交，倉位面板隨即出現倉位和強平價。',en:'Confirm Sell side with the computed quantity, then place the order. It fills against the resting book and the position appears with its liquidation price.'},
-    say: {'zh-CN':'现在他的对冲单开好了：房价跌多少，仓位就赚多少，净值被钉住。','zh-TW':'現在他的對沖單開好了：房價跌多少，倉位就賺多少，淨值被釘住。',en:'His hedge is on: if the price falls, the position gains — his net value is pinned.'},
+    body: {'zh-CN':'确认下单区是卖出方向、数量来自测算。如果盘口有买盘，价格会取最优买价以便成交；如果盘口为空，页面会提醒先铺盘，此时下单只会挂着等待。成交后再检查仓位与链上结算日志。','zh-TW':'確認下單區是賣出方向、數量來自測算。如果盤口有買盤，價格會取最優買價以便成交；如果盤口為空，頁面會提醒先鋪盤，此時下單只會掛單等待。成交後再檢查倉位與鏈上結算日誌。',en:'Confirm the Sell side and computed quantity. If bids exist, the price uses the best bid to cross; if the book is empty, seed it first or the order will rest. Check the position and settlement log after a fill.'},
+    say: {'zh-CN':'真实对冲是否有效，取决于 RWA 与永续标的的相关性、价格来源和对冲比例。当前盘口是演示市场，不声称它与 SRT-RWA 同标的；这一步验证的是仓位测算与结算路径。','zh-TW':'真實對沖是否有效，取決於 RWA 與永續標的的相關性、價格來源和對沖比例。當前盤口是演示市場，不聲稱它與 SRT-RWA 同標的；這一步驗證的是倉位測算與結算路徑。',en:'A real hedge depends on correlation, price sources and hedge ratio. This demo market is not claimed to track SRT-RWA; this step verifies sizing and settlement flow.'},
     done: () => { const e=document.getElementById('positionBody'); return e && !/暂无仓位|No position/.test(e.textContent) && e.textContent.trim().length > 0 && !/连接钱包后显示/.test(e.textContent); } },
   { target: '#tradesBody',
     title: {'zh-CN':'第 7 步 · 点开链上凭证','zh-TW':'第 7 步 · 點開鏈上憑證',en:'Step 7 · Open the on-chain proof'},
     body: {'zh-CN':'在“最近成交”或下方日志里找到刚成交那笔的哈希链接，点开 Snowtrace 给评委看 success 和余额变化。每次哈希都不同，这是真发生的证据。','zh-TW':'在「最近成交」或下方日誌裡找到剛成交那筆的哈希連結，點開 Snowtrace 給評委看 success 和餘額變化。每次哈希都不同，這是真發生的證據。',en:'Find the new trade hash in Recent Trades or the log and open Snowtrace: success status and balance changes. Every hash differs — because every trade really happened.'},
     say: {'zh-CN':'这笔结算是这一分钟刚上链的。哈希和昨天截图里的不一样，明天还会再变——因为每一笔都是真的。','zh-TW':'這筆結算是這一分鐘剛上鏈的。哈希和昨天截圖裡的不一樣，明天還會再變——因為每一筆都是真的。',en:'This settlement landed on-chain this minute. Its hash differs from any screenshot — and will differ again tomorrow, because each trade is real.'},
-    done: () => false },
+    done: () => !!document.querySelector('#tradesBody a[href*="/tx/"]') },
 ];
 
 let tourIdx = -1, tourTimer = null;
@@ -1094,10 +1713,14 @@ function tourRender() {
   $('tourBody').textContent = step.body[LANG] || step.body['zh-CN'];
   $('tourSay').textContent = step.say[LANG] || step.say['zh-CN'];
   $('tourProg').textContent = `${tourIdx + 1} / ${TOUR_STEPS.length}`;
-  $('tourSayLabel').textContent = LANG === 'en' ? 'Say this' : '照着念';
+  $('tourSayLabel').textContent = LANG === 'en' ? 'Talking point' : (LANG === 'zh-TW' ? '講解要點' : '讲解要点');
+  // 讲解要点默认不显示：引导面板首先是产品功能，不是提词器。
+  // 需要它的人（讲者）用右上角“讲稿”开关打开，选择记在本地浏览器。
+  $('tourSayWrap').style.display = PRESENTER ? 'block' : 'none';
   $('tourPrev').textContent = LANG === 'en' ? 'Back' : '上一步';
   $('tourNext').textContent = LANG === 'en' ? 'Next' : '下一步';
   $('tourDone').textContent = LANG === 'en' ? 'I did it' : '我已完成';
+  $('tourRestart').textContent = LANG === 'en' ? 'Restart' : '重新开始';
   $('tourExit').textContent = LANG === 'en' ? 'Exit guide' : '退出引导';
   const el = document.querySelector(step.target);
   const box = $('tourBox');
@@ -1117,7 +1740,9 @@ function tourCheck() {
   let ok = false;
   try { ok = !!step.done(); } catch {}
   $('tourState').textContent = ok
-    ? (LANG === 'en' ? '✓ Detected as done — you can move on' : '✓ 已检测到完成，可以下一步')
+    ? (LANG === 'en'
+        ? '✓ Already done — click Next to continue, or Restart to walk through it again'
+        : '✓ 这一步已经完成 — 点“下一步”继续；想从头再走一遍点“重新开始”')
     : (LANG === 'en' ? 'Waiting… (or click “I did it” to continue)' : '等待完成…（也可以点“我已完成”继续）');
   if (ok) $('tourState').style.color = '#3fb950'; else $('tourState').style.color = '#9aa4af';
 }
@@ -1141,14 +1766,37 @@ function tourExit() {
 $('tourNext').addEventListener('click', () => tourGo(tourIdx + 1));
 $('tourDone').addEventListener('click', () => tourGo(tourIdx + 1));
 $('tourPrev').addEventListener('click', () => tourGo(tourIdx - 1));
+$('tourRestart').addEventListener('click', () => { tourStart(); log('引导已回到第 1 步（链上余额与服务端状态未改动）'); });
 $('tourExit').addEventListener('click', tourExit);
 $('guideBtn').addEventListener('click', tourStart);
 window.addEventListener('resize', () => { if (tourIdx >= 0) tourRender(); });
+
+// ---------- 讲稿模式：把"讲解要点"从产品界面里收起来，讲者需要时再打开 ----------
+function applyPresenterMode() {
+  const btn = $('presenterBtn');
+  if (!btn) return;
+  btn.textContent = LANG === 'en' ? (PRESENTER ? 'Script: on' : 'Script') : (PRESENTER ? '讲稿：开' : '讲稿');
+  btn.title = PRESENTER
+    ? '引导面板正在显示讲解要点（点一下收起）'
+    : '打开后引导面板会多出一段讲解要点（默认关闭：页面就是产品本身，不是提词器）';
+  btn.style.borderColor = PRESENTER ? '#E84142' : '';
+  btn.style.color = PRESENTER ? '#E84142' : '';
+  if (tourIdx >= 0) tourRender();
+}
+$('presenterBtn').addEventListener('click', () => {
+  PRESENTER = !PRESENTER;
+  localStorage.setItem('avavault-presenter', PRESENTER ? '1' : '0');
+  applyPresenterMode();
+  if (PRESENTER && tourIdx < 0) tourStart();
+});
+applyPresenterMode();
 
 // ---------- 三语切换：核心界面词条（引导文案本身已三语） ----------
 const I18N_STATIC = {
   '连接钱包并登录': {en:'Connect & Login','zh-TW':'連接錢包並登入'},
   '新手引导': {en:'▶ Guided Demo','zh-TW':'▶ 新手引導'},
+  '演示导览': {en:'Guided Demo','zh-TW':'演示導覽'},
+  '推进 TWAP 并刷新估值（链上）': {en:'Poke TWAP & Refresh Valuation (on-chain)','zh-TW':'推進 TWAP 並重新整理估值（鏈上）'},
   '领取 1,000 mUSDC 并存入保证金': {en:'Claim & Deposit 1,000 mUSDC','zh-TW':'領取 1,000 mUSDC 並存入保證金'},
   '授权并存入 RWA 到 MultiCollateralVaultV2': {en:'Approve & Deposit RWA','zh-TW':'授權並存入 RWA 到 MultiCollateralVaultV2'},
   '计算对冲仓位': {en:'Compute Hedge','zh-TW':'計算對沖倉位'},
@@ -1163,6 +1811,18 @@ const I18N_STATIC = {
   '最近成交': {en:'Recent Trades','zh-TW':'最近成交'},
   '链上合约（Avalanche Fuji，可验证）': {en:'On-chain Contracts (Fuji)','zh-TW':'鏈上合約（Avalanche Fuji，可驗證）'},
   '日志 / 成交回报': {en:'Log / Fills','zh-TW':'日誌 / 成交回報'},
+  '演示控制台（自检 · 重跑）': {en:'Demo Console (self-check · replay)','zh-TW':'演示控制台（自檢 · 重跑）'},
+  '一键自检': {en:'Self-check','zh-TW':'一鍵自檢'},
+  '刷新全部数据': {en:'Refresh all','zh-TW':'重新整理全部資料'},
+  '铺盘口（演示流动性）': {en:'Seed book (demo liquidity)','zh-TW':'鋪盤口（演示流動性）'},
+  '清空服务端演示状态': {en:'Reset server demo state','zh-TW':'清空服務端演示狀態'},
+  '全部重跑（清空 → 铺盘口 → 回到第 1 步）': {en:'Replay all (reset → seed → step 1)','zh-TW':'全部重跑（清空 → 鋪盤口 → 回到第 1 步）'},
+  '提回 mUSDC 保证金（链上）': {en:'Withdraw mUSDC margin (on-chain)','zh-TW':'提回 mUSDC 保證金（鏈上）'},
+  '提回 RWA 抵押（链上）': {en:'Withdraw RWA collateral (on-chain)','zh-TW':'提回 RWA 抵押（鏈上）'},
+  '重新开始': {en:'Restart','zh-TW':'重新開始'},
+  '退出引导': {en:'Exit guide','zh-TW':'退出引導'},
+  '我已完成': {en:'I did it','zh-TW':'我已完成'},
+  '参考价来源': {en:'Reference price source','zh-TW':'參考價來源'},
 };
 function applyLang() {
   document.querySelectorAll('h3,button,label').forEach((el) => {
@@ -1177,6 +1837,7 @@ function applyLang() {
     else if (entry && entry[LANG]) el.textContent = entry[LANG];
   });
   $('langSel').value = LANG;
+  applyPresenterMode();
   if (tourIdx >= 0) tourRender();
 }
 $('langSel').addEventListener('change', (e) => {
@@ -1185,6 +1846,25 @@ $('langSel').addEventListener('change', (e) => {
   applyLang();
 });
 applyLang();
+
+// 调试/自检钩子：现场出问题时可以在浏览器控制台直接调用，不必重开页面。
+// 例：__avavault.selfCheck() / __avavault.refreshAll() / __avavault.tourStart()
+//     __avavault.state() 看当前链上读数与参考价兜底情况
+window.__avavault = {
+  state: () => ({
+    apiReady, account, apiUrl,
+    vaultBalance: lastVaultBalance?.toString() ?? null,
+    rwaInVault: lastRwaVaultBalance?.toString() ?? null,
+    rwaInWallet: lastRwaWalletBalance?.toString() ?? null,
+    margin: lastMarginView,
+    bestBid: latestBestBid, bestAsk: latestBestAsk,
+    presenterMode: PRESENTER, lang: LANG, tourStep: tourIdx,
+  }),
+  selfCheck, refreshAll, seedBook, resetDemo, replayAll,
+  runHedgeQuote, renderHedgeQuote, refreshBalance, refreshRwa, refreshPosition,
+  tourStart, tourExit, tourGo, applyPresenterMode,
+  roundDecimalsStr, fmtAmount, fmtEngineMoney,
+};
 
 startHealthMonitor();
 </script>
