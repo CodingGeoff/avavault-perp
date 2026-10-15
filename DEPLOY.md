@@ -77,3 +77,12 @@ backend that genuinely never sleeps instead of relying on a keep-alive ping, see
 - The SQLite order book file lives on Render's ephemeral disk, so it resets on
   redeploy/restart — that's fine for a demo (seed script is in
   `task7-perp-dex/demo/seed_orderbook.mjs` if you want to pre-populate it again).
+- Every push to `main` redeploys this service on Render (even docs/CI-only commits).
+  While it is redeploying or spinning up, Render's edge answers browser requests
+  *instantly* with a 503 loading page that has no CORS headers, so the demo page's
+  `fetch` fails immediately and DevTools shows a CORS error. That is expected: the
+  page keeps retrying until the API is up (hover the API pill or read the log panel
+  for the exact reason). A red "请求被拦截" pill instead means the request never
+  reached the server — usually an ad-blocker/privacy extension or a proxy.
+- `GET /` returns a small JSON pointer (it used to be Express's default
+  `Cannot GET /`, which never meant the service was down); use `/health` for checks.

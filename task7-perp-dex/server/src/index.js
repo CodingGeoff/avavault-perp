@@ -461,6 +461,17 @@ wss.on("connection", (ws, req) => {
 // REST API
 // ---------------------------------------------------------------
 
+// 根路径：Express 默认会回 "Cannot GET /"，常被误以为服务挂了。这里只是一个 JSON API，
+// 健康检查请用 /health，演示页面在 GitHub Pages 上。
+app.get("/", (_req, res) =>
+  res.json({
+    ok: true,
+    service: "avavault-perp-dex-api",
+    health: "/health",
+    demo: "https://codinggeoff.github.io/avavault-perp/",
+  })
+);
+
 app.get("/health", (_req, res) =>
   res.json({
     ok: true,
