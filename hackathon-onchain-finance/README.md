@@ -147,6 +147,8 @@ forge script script/Deploy.s.sol:Deploy --rpc-url $FUJI_RPC_URL --broadcast --pr
 | 项目 | 值 |
 |---|---|
 | MultiCollateralVaultV2 地址 | [`0xb999cb61A4fb2FE71d1C5FBA7aD506F619dD7884`](https://testnet.snowtrace.io/address/0xb999cb61A4fb2FE71d1C5FBA7aD506F619dD7884) |
+| PerpMarginAccount（合约层仓位保证金） | [`0xB329713EbF8c72a3ffD5605fa720482c58601610`](https://testnet.snowtrace.io/address/0xB329713EbF8c72a3ffD5605fa720482c58601610) |
+| SimpleMarkOracle（独立标记价） | [`0x713Ef730F1f04350752e3684Af0ebDF4288eC482`](https://testnet.snowtrace.io/address/0x713Ef730F1f04350752e3684Af0ebDF4288eC482) |
 | 复用的 RWAToken / WAVAX-RWA 池 | 同上文表格里已部署的地址，无需重新加流动性 |
 | TWAP 抵御同笔交易操纵的证明 | fork 测试 `test_CollateralValueResistsSameWindowManipulation`：攻击者砸盘 100 AVAX 操纵 RWA 现价后，`collateralValue()` 在 TWAP 窗口刷新前的读数与操纵前完全一致（两次读数都是 `13999999999999999999`，未被影响） |
 | 真实签名授权结算交易 | [`0x452c4cf135fc77a1ef09bcf54b39fc2037dd2723e469e7f8347910b62eddb256`](https://testnet.snowtrace.io/tx/0x452c4cf135fc77a1ef09bcf54b39fc2037dd2723e469e7f8347910b62eddb256)：trader A 自签 EIP-712 授权（最多同意转出 300 RWA），operator 凭签名把 200 RWA 从 trader A 转给 trader B，链上余额从 500/0 变为 300/200 |
@@ -156,6 +158,32 @@ forge script script/Deploy.s.sol:Deploy --rpc-url $FUJI_RPC_URL --broadcast --pr
 覆盖 TWAP 热身前后取值、同笔交易操纵免疫、有效签名结算、伪造签名拒绝、超额度拒绝、用户撤销授权拒绝、
 取款行为不变。加上原有 `MultiCollateralVault.t.sol` 的 5 个 V1 回归用例，`forge test` 总计
 13/13 通过，V1 行为未受任何影响。
+
+## 合约层仓位保证金：`PerpMarginAccount.sol`（原路线图第 1、3 项，已部署 ✅）
+
+服务层的 RWA→保证金绑定已经在 V2 金库上完成；这一步把它**下沉到合约层**：`PerpMarginAccount`
+直接读 `MultiCollateralVaultV2.totalAccountValue()`（TWAP 折价后的 RWA 估值），按治理配置的
+quote 美元价折算成 mUSDC 计入可用保证金，仓位/杠杆/VWAP 入场/独立标记价强平/保险基金兜底
+全在合约内完成。规则与撮合引擎的 `positions.ts` 是同一套（净仓位、初始保证金 = 名义/杠杆、
+平仓按比例释放、反手先平后开）。
+
+**已部署富士测试网，并把四个关键动作全部用真实交易跑通：**
+
+| 合约 / 动作 | 地址 / 交易哈希 |
+|---|---|
+| `PerpMarginAccount` | [`0xB329713EbF8c72a3ffD5605fa720482c58601610`](https://testnet.snowtrace.io/address/0xB329713EbF8c72a3ffD5605fa720482c58601610) |
+| `SimpleMarkOracle`（独立标记价） | [`0x713Ef730F1f04350752e3684Af0ebDF4288eC482`](https://testnet.snowtrace.io/address/0x713Ef730F1f04350752e3684Af0ebDF4288eC482) |
+| ① 存款 1 mUSDC | [`0x2ed4fb88…a1ba00`](https://testnet.snowtrace.io/tx/0x2ed4fb88fbcd749e80f1d16ae34843bc1552c6495129bcde03f9a4c49ea1ba00) |
+| ② 开仓 40 手 @2500，20x | [`0x6abe9670…7f852c`](https://testnet.snowtrace.io/tx/0x6abe967036b465beb585ad5438dce1c0c1b971da21c843cec9ae3cdd847f852c) |
+| ③ 改标记价 2500 → 2350 | [`0x48e2cbfb…827aa32`](https://testnet.snowtrace.io/tx/0x48e2cbfb1c26e6d568ff13583135eda3ed3f8976781e7be45c9f803c3827aa32) |
+| ④ 强平（穿仓由保险基金兜底） | [`0xcd7041a6…919991e`](https://testnet.snowtrace.io/tx/0xcd7041a63b926c30fe5b7c47bb6dd9f03b85a08bdfeb2e9f5b3894323919991e) |
+| 链上读数前后对照 + 复现命令 + 两次运行哈希 | 见 `contracts/SMOKE_EVIDENCE.md`（机器可读证据 `contracts/smoke/`） |
+
+关键链上事实（都能用 `cast call` 复核）：改标记价后仓位权益 `-1000` 跌破维持保证金 `4700` →
+`liquidate()` 事件里 `pnl = -6000`、缺口 `1000` 全额由保险基金兜底、`badDebt = 0`、用户自由
+保证金分文未动；整条链路（存款→开仓→改价→强平）没有一笔成交砸盘，强平完全由**独立标记价**
+驱动。部署参数：`quotePriceE6 = 9620000`（部署当天 WAVAX ≈ $9.62）、`INITIAL_MARK_PRICE = 2500`。
+前端"链上仓位保证金"面板会实时显示这个合约的标记价 / 保险基金 / 累计兜底与坏账。
 
 ## 路线图（如果继续做下去）
 
@@ -169,8 +197,9 @@ forge script script/Deploy.s.sol:Deploy --rpc-url $FUJI_RPC_URL --broadcast --pr
 2. ~~**TWAP / 多源价格**~~：✅ 已在 `MultiCollateralVaultV2.sol` 中完成，见上一节。
 3. **清算引擎**：✅ 服务层已实现（仓位引擎按独立标记价监控权益，跌破维持保证金
    自动强平、穿仓由保险基金兜底，见 `task7-perp-dex/README.md` 3.5 节）；合约层
-   版本在 `contracts/src/PerpMarginAccount.sol`（待部署）。允许第三方清算人接管
-   仓位的开放清算人网络仍待后续。
+   版本 `contracts/src/PerpMarginAccount.sol` **已部署 Fuji 并跑通存款→开仓→改标记价→
+   强平四个真实动作**（任何地址都可调用 `liquidate()`，证据见上一节与
+   `contracts/SMOKE_EVIDENCE.md`）。允许第三方清算人接管仓位的开放清算人网络仍待后续。
 4. ~~**operator 多签化**~~：✅ EIP-712 签名授权门控已在 `MultiCollateralVaultV2.sol` 中完成，见上一节；
    给 `operator` 私钥本身再加多签/时间锁仍是可选的进一步加固方向。
 5. **接入 Kite AI**：让一个 AI Agent 代表用户自动监控仓位健康度、在跌破阈值前主动追加保证金或

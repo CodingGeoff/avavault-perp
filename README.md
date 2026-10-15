@@ -55,7 +55,12 @@ Full disclosure and a component-by-component breakdown is in the submission form
   [`RWAToken`](https://testnet.snowtrace.io/address/0x1cC1650E2Da5c2357c811B90187D1022b70B70Ad) ·
   [`MultiCollateralVault`](https://testnet.snowtrace.io/address/0x9128AE5F8cf51eB35A69C29c55B07A7776603b0B) ·
   [`MultiCollateralVaultV2`](https://testnet.snowtrace.io/address/0xb999cb61A4fb2FE71d1C5FBA7aD506F619dD7884) ·
-  [`VaultV2` (perp matching demo)](https://testnet.snowtrace.io/address/0x0425352bc3c5293D5629c27525969439Ab9C27b5)
+  [`VaultV2` (perp matching demo)](https://testnet.snowtrace.io/address/0x0425352bc3c5293D5629c27525969439Ab9C27b5) ·
+  [`PerpMarginAccount` (contract-level position margin)](https://testnet.snowtrace.io/address/0xB329713EbF8c72a3ffD5605fa720482c58601610) ·
+  [`SimpleMarkOracle`](https://testnet.snowtrace.io/address/0x713Ef730F1f04350752e3684Af0ebDF4288eC482)
+  — the last two are covered end-to-end (deposit → open → mark-price move → liquidation
+  with insurance-fund backstop) by four real Fuji transactions documented in
+  [`hackathon-onchain-finance/contracts/SMOKE_EVIDENCE.md`](./hackathon-onchain-finance/contracts/SMOKE_EVIDENCE.md).
 
 ## Running it locally
 

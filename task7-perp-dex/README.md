@@ -230,7 +230,8 @@ RWA 抵押品经 TWAP 折价后的估值，与本系统 Vault 的 mUSDC 余额�
 仅靠 RWA 估值的买单通过校验，无保证金买单被拦截）；原有 `test-e2e.mjs`、
 `test-robustness.mjs` 与撮合引擎测试回归不受影响。边界：这是服务层的购买力
 校验；仓位保证金绑定已在服务层实现（见 3.5），合约层绑定见黑客松目录的
-`PerpMarginAccount.sol`（待部署）。
+`PerpMarginAccount.sol`（**已部署 Fuji**：`0xB329…1610`，存款→开仓→改标记价→强平
+四个动作的真实交易见 `hackathon-onchain-finance/contracts/SMOKE_EVIDENCE.md`）。
 
 ### 3.5 永续仓位引擎（仓位 / 杠杆 / 强平）
 
@@ -257,7 +258,8 @@ VWAP 入场价、初始保证金 = 名义价值 / 杠杆逐笔占用、平仓按
 （`GET /insurance` 查看，状态落库）。合约层对应实现见
 `hackathon-onchain-finance/contracts/src/PerpMarginAccount.sol`（直接读金库
 `totalAccountValue()` 计入仓位保证金，独立标记价强平、保险基金兜底，附
-Foundry 测试，待部署）。
+Foundry 测试；**已部署 Fuji** [`0xB329…1610`](https://testnet.snowtrace.io/address/0xB329713EbF8c72a3ffD5605fa720482c58601610)，
+四个动作的链上证据见 `hackathon-onchain-finance/contracts/SMOKE_EVIDENCE.md`）。
 
 资金费率已实现：标记价（成交 TWAP）相对指数价（外部喂价）的溢价决定费率
 （封顶 ±`FUNDING_MAX_BPS`，默认 10bps），每 `FUNDING_INTERVAL_MS`（默认 8 小时）
