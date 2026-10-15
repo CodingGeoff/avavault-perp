@@ -10,6 +10,8 @@ import { persistOrderResult, persistOrderState, markTradeSettled, loadRecentTrad
 import { MarkOracle } from "./markOracle.js";
 import { MarginService, parsePriceToE6 } from "./margin.js";
 import { computeHedgeQuote } from "../../matching-engine/dist/hedge.js";
+import { resolveReferencePrice, buildRefPriceDiagnostics, REF_PRICE_SOURCE_LABELS } from "./referencePrice.js";
+import { DemoLiquidity } from "./demoLiquidity.js";
 
 const PORT = process.env.PORT || 4000;
 const RPC_URL = process.env.FUJI_RPC_URL || "https://api.avax-test.network/ext/bc/C/rpc";
@@ -111,6 +113,51 @@ let marginService = new MarginService({});
     `[margin] RWA collateral source ${MULTICOLLATERAL_VAULT_ADDRESS || "disabled"}` +
       `, counted in margin: ${marginService.rwaCounted}, enforcement: ${MARGIN_ENFORCE ? "ON" : "off"}`
   );
+}
+
+// ---------------------------------------------------------------
+// 对冲测算参考价兜底：演示环境刚重置时「外部喂价 / 成交 TWAP / 盘口最优价」
+// 三者可能同时为空，以前 /hedge/quote 直接 503 "no reference price available"，
+// 前端只弹一行英文错误，整条演示主线卡死。现在允许部署方配一个兜底参考价，
+// 响应里如实标注 referencePriceSource=config-fallback（不是市场数据），
+// 前端也会把来源显示出来——宁可标明是兜底值，也不假装这是盘口读出来的价。
+// 设为空字符串可关闭兜底、恢复严格的 503 行为。
+// ---------------------------------------------------------------
+const HEDGE_FALLBACK_REF_PRICE = (() => {
+  const raw = process.env.HEDGE_FALLBACK_REF_PRICE === undefined ? "2500" : process.env.HEDGE_FALLBACK_REF_PRICE;
+  const trimmed = String(raw).trim();
+  if (!trimmed) return null;
+  if (!/^\d+$/.test(trimmed) || BigInt(trimmed) <= 0n) {
+    console.error(`[hedge] ignoring invalid HEDGE_FALLBACK_REF_PRICE "${raw}" (expected a positive integer)`);
+    return null;
+  }
+  return BigInt(trimmed);
+})();
+
+// ---------------------------------------------------------------
+// 演示流动性：服务端持有一个做市钱包，在中间价两侧挂真实签名限价单，
+// 保证「参考价可得 + 演示者的对冲空单有对手盘 + 成交能真实上链结算」。
+// 见 src/demoLiquidity.js；未配置 DEMO_MAKER_PRIVATE_KEY 时整体停用，
+// 此时请用 demo/seed_counterparty.mjs 从本地铺盘口。
+// ---------------------------------------------------------------
+const DEMO_MAKER_PRIVATE_KEY = process.env.DEMO_MAKER_PRIVATE_KEY || "";
+const SEED_DEMO_LIQUIDITY = /^(1|true|yes)$/i.test(process.env.SEED_DEMO_LIQUIDITY || "");
+const demoLiquidity = new DemoLiquidity({
+  makerWallet: DEMO_MAKER_PRIVATE_KEY ? new ethers.Wallet(DEMO_MAKER_PRIVATE_KEY) : null,
+  midPrice: BigInt(process.env.DEMO_MID_PRICE || 2500),
+  levels: Number(process.env.DEMO_LIQUIDITY_LEVELS || 3),
+  baseQty: BigInt(process.env.DEMO_LIQUIDITY_BASE_QTY || 100),
+  readVaultBalance: VAULT_ADDRESS
+    ? async (address) => {
+        const c = vaultContract || new ethers.Contract(VAULT_ADDRESS, VAULT_ABI_V2, provider || new ethers.JsonRpcProvider(RPC_URL));
+        return withTimeout(c.balanceOf(address), MARGIN_RPC_TIMEOUT_MS, "demo maker balanceOf");
+      }
+    : null,
+});
+if (demoLiquidity.enabled) {
+  console.log(`[demo-liquidity] maker ${demoLiquidity.address} around mid=${demoLiquidity.midPrice}, auto-seed: ${SEED_DEMO_LIQUIDITY ? "ON" : "off"}`);
+} else {
+  console.log("[demo-liquidity] disabled (set DEMO_MAKER_PRIVATE_KEY to enable server-side seeding)");
 }
 
 
@@ -546,6 +593,204 @@ app.post("/admin/reset-demo", (req, res) => {
   res.json({ ok: true, note: "server-side demo state cleared; on-chain balances are NOT affected" });
 });
 
+/**
+ * 演示自检：一次调用把"演示要跑通需要哪些前提、现在哪些还没满足"全列出来。
+ * 前端"演示控制台"直接渲染 checks 数组；也能在开演前用 curl 打一遍。
+ * 只读、不需要鉴权（不含任何密钥/私钥信息）。?deep=1 会额外读一次链上做市钱包余额。
+ */
+app.get("/demo/status", async (req, res) => {
+  const snap = book.getSnapshot(5);
+  const mark = await markOracle.getMark();
+  const resolved = resolveReferencePrice({
+    explicit: null,
+    mark,
+    bestAsk: book.getBestAsk(),
+    bestBid: book.getBestBid(),
+    fallback: HEDGE_FALLBACK_REF_PRICE,
+  });
+  const funding = await getFundingStatus().catch(() => null);
+  const insurance = serializeInsuranceState();
+  const deep = req.query.deep === "1" || req.query.deep === "true";
+
+  let makerVaultBalance = null;
+  if (deep && demoLiquidity.enabled && demoLiquidity.readVaultBalance) {
+    try {
+      makerVaultBalance = (await demoLiquidity.readVaultBalance(demoLiquidity.address)).toString();
+    } catch (e) {
+      makerVaultBalance = `unavailable: ${e.message}`;
+    }
+  }
+
+  const checks = [];
+  checks.push({
+    id: "settlement",
+    required: true,
+    label: "链上结算（VaultV2 + operator）",
+    ok: !!vaultContract,
+    detail: vaultContract ? `${VAULT_ABI_VERSION} · ${VAULT_ADDRESS}` : "未配置 VAULT_ADDRESS / OPERATOR_PRIVATE_KEY",
+    fix: "在 Render 环境变量里配置 VAULT_ADDRESS 与 OPERATOR_PRIVATE_KEY（v2 模式另需 VAULT_ABI_VERSION=v2）",
+  });
+  checks.push({
+    id: "book-depth",
+    required: true,
+    label: "盘口有双边挂单（对冲单能立刻成交）",
+    ok: snap.bids.length > 0 && snap.asks.length > 0,
+    detail: `bids ${snap.bids.length} 档 / asks ${snap.asks.length} 档，最优 ${book.getBestBid() ?? "-"} × ${book.getBestAsk() ?? "-"}`,
+    fix: "运行 demo/seed_counterparty.mjs，或 POST /admin/seed-book（需配置 DEMO_MAKER_PRIVATE_KEY）",
+  });
+  checks.push({
+    id: "reference-price",
+    required: true,
+    label: "参考价可得（对冲测算不会 503）",
+    ok: resolved.price !== null,
+    detail: resolved.price === null
+      ? "喂价/成交 TWAP/盘口/兜底值全为空"
+      : `${resolved.price}（来源：${(REF_PRICE_SOURCE_LABELS[resolved.source] || {}).zh || resolved.source}${resolved.marketData ? "" : "，非市场数据"}）`,
+    fix: "铺盘口或产生一笔成交；也可以设置 HEDGE_FALLBACK_REF_PRICE 作为兜底",
+  });
+  checks.push({
+    id: "mark-price",
+    required: false,
+    label: "标记价预言机有读数（强平/资金费的锚）",
+    ok: !!mark,
+    detail: mark ? `${mark.price}（来源：${mark.source}${mark.stale ? "，样本已过期" : ""}）` : "无外部喂价、无成交样本",
+    fix: "配置 MARK_PRICE_FEED_URL 接真实喂价，或先产生几笔成交让 TWAP 有样本",
+  });
+  checks.push({
+    id: "rwa-margin",
+    required: false,
+    label: "RWA 抵押估值计入可用保证金",
+    ok: marginService.rwaCounted,
+    detail: marginService.rwaCounted
+      ? "已按配置的 quote→USD 换算率计入"
+      : (marginService.rwaConfigured ? "金库已接，但未配置 MARGIN_QUOTE_USD_PRICE，估值只展示不计入" : "未配置 MultiCollateralVault 地址"),
+    fix: "设置 MARGIN_QUOTE_USD_PRICE（quote 代币美元价，如 WAVAX 25.5 → 25.5）后 RWA 估值才计入综合保证金",
+  });
+  checks.push({
+    id: "margin-enforce",
+    required: false,
+    label: "下单前保证金校验",
+    ok: MARGIN_ENFORCE,
+    detail: MARGIN_ENFORCE ? "ON（保证金不足的加仓会被拒）" : "off（只展示不拦截，演示更稳）",
+    fix: "演示阶段建议保持 off；要展示风控拦截时设 MARGIN_ENFORCE=true",
+  });
+  checks.push({
+    id: "demo-liquidity",
+    required: false,
+    label: "服务端演示做市钱包",
+    ok: demoLiquidity.enabled,
+    detail: demoLiquidity.enabled
+      ? `${demoLiquidity.address} · 中间价 ${demoLiquidity.midPrice} · 上次铺盘 ${demoLiquidity.lastSeedAt ? new Date(demoLiquidity.lastSeedAt).toISOString() : "尚未执行"}`
+      : "未配置 DEMO_MAKER_PRIVATE_KEY",
+    fix: "配置 DEMO_MAKER_PRIVATE_KEY（并先用 demo/fund_demo_maker.mjs 给它存 mUSDC），或改用本地脚本 demo/seed_counterparty.mjs",
+  });
+  if (deep && makerVaultBalance !== null) {
+    const funded = /^\d+$/.test(makerVaultBalance) && BigInt(makerVaultBalance) > 0n;
+    checks.push({
+      id: "demo-liquidity-funds",
+      required: false,
+      label: "做市钱包在 Vault 里有保证金（决定成交能否上链结算）",
+      ok: funded,
+      detail: `余额 ${makerVaultBalance}`,
+      fix: "运行 demo/fund_demo_maker.mjs 给做市钱包领取并存入 mUSDC，否则成交只撮合、结算会失败",
+    });
+  }
+  checks.push({
+    id: "admin-reset",
+    required: false,
+    label: "彩排重置端点可用",
+    ok: !!process.env.ADMIN_RESET_TOKEN,
+    detail: process.env.ADMIN_RESET_TOKEN ? "已配置 ADMIN_RESET_TOKEN" : "未配置，/admin/reset-demo 与 /admin/seed-book 被禁用",
+    fix: "在 Render 环境变量里设置 ADMIN_RESET_TOKEN（演示前用它清盘口/仓位）",
+  });
+  checks.push({
+    id: "funding-index",
+    required: false,
+    label: "资金费有独立指数价（否则费率恒 0）",
+    ok: !!(funding && funding.indexPrice),
+    detail: funding
+      ? (funding.indexPrice ? `指数价 ${funding.indexPrice}，费率 ${funding.rateBps} bps` : "未配置 MARK_PRICE_FEED_URL，不结算资金费（不硬造溢价）")
+      : "资金费状态不可用",
+    fix: "配置 MARK_PRICE_FEED_URL 后即可按标记价对指数价的溢价结算资金费",
+  });
+
+  const requiredChecks = checks.filter((c) => c.required);
+  res.json({
+    // ok 表示核心的“可计算 + 有对手盘 + 能链上结算”主线是否就绪；
+    // RWA 换算、资金费喂价、管理员工具等是额外能力，不混成一个红色失败状态。
+    ok: requiredChecks.every((c) => c.ok),
+    readyForHedgeFlow: checks.filter((c) => ["reference-price", "book-depth"].includes(c.id)).every((c) => c.ok),
+    readyForOnchainSettlement: checks.find((c) => c.id === "settlement")?.ok ?? false,
+    readyForRwaMargin: checks.find((c) => c.id === "rwa-margin")?.ok ?? false,
+    requiredChecks: requiredChecks.map((c) => c.id),
+    checks,
+    book: {
+      bids: snap.bids.map((l) => ({ price: l.price.toString(), quantity: l.quantity.toString() })),
+      asks: snap.asks.map((l) => ({ price: l.price.toString(), quantity: l.quantity.toString() })),
+      bestBid: book.getBestBid()?.toString() ?? null,
+      bestAsk: book.getBestAsk()?.toString() ?? null,
+    },
+    mark: mark ? { price: mark.price.toString(), source: mark.source, asOf: mark.asOf, stale: mark.stale } : null,
+    referencePrice: resolved.price === null ? null : { price: resolved.price.toString(), source: resolved.source, marketData: resolved.marketData },
+    settlement: { enabled: !!vaultContract, version: VAULT_ABI_VERSION, vault: VAULT_ADDRESS || null },
+    margin: {
+      enforce: MARGIN_ENFORCE,
+      rwaConfigured: marginService.rwaConfigured,
+      rwaCounted: marginService.rwaCounted,
+      multicollateralVault: MULTICOLLATERAL_VAULT_ADDRESS || null,
+      hedgeFallbackRefPrice: HEDGE_FALLBACK_REF_PRICE === null ? null : HEDGE_FALLBACK_REF_PRICE.toString(),
+    },
+    funding,
+    insurance,
+    demoLiquidity: {
+      enabled: demoLiquidity.enabled,
+      maker: demoLiquidity.address,
+      midPrice: demoLiquidity.midPrice.toString(),
+      lastSeedAt: demoLiquidity.lastSeedAt,
+      makerVaultBalance,
+    },
+    counts: {
+      openPositions: positions.allSnapshots().filter((p) => p.sizeSigned !== 0n).length,
+      loginSessions: sessions.size,
+      insuranceFund: insurance.insuranceFund ?? null,
+    },
+  });
+});
+
+/**
+ * 一键铺演示盘口（服务端做市钱包）。
+ * 需要 DEMO_MAKER_PRIVATE_KEY；配置了 ADMIN_RESET_TOKEN 时还要带 x-admin-token 头，
+ * 避免有人在正式演示中途改盘口。做市钱包在 Vault 里没有 mUSDC 时会在 warnings 里
+ * 如实说明"成交能撮合但链上结算会失败"。
+ */
+app.post("/admin/seed-book", async (req, res) => {
+  const expected = process.env.ADMIN_RESET_TOKEN || "";
+  // 这个端点会替 DEMO_MAKER_PRIVATE_KEY 使用有余额的钱包挂买单。
+  // 绝不能在没有令牌时公开开放，否则任何人都能把卖单打进做市买盘并抽走测试币。
+  if (!expected) {
+    return res.status(403).json({ error: "demo seeding disabled (ADMIN_RESET_TOKEN not set)" });
+  }
+  if (req.get("x-admin-token") !== expected) {
+    return res.status(401).json({ error: "invalid admin token" });
+  }
+  if (!demoLiquidity.enabled) {
+    return res.status(501).json({
+      error: "server-side demo liquidity is not configured",
+      hint: "set DEMO_MAKER_PRIVATE_KEY (and fund it via demo/fund_demo_maker.mjs), or seed from your laptop with demo/seed_counterparty.mjs",
+    });
+  }
+  try {
+    const midPrice = req.body?.midPrice !== undefined ? toBigIntSafe(req.body.midPrice) : demoLiquidity.midPrice;
+    if (midPrice === null || midPrice <= 0n) return res.status(400).json({ error: "midPrice must be a positive integer" });
+    demoLiquidity.midPrice = midPrice;
+    const result = await demoLiquidity.seed();
+    broadcastPublic("orderbook", serializeSnapshot(book.getSnapshot(20)));
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 app.get("/orderbook", (_req, res) => {
   const snap = book.getSnapshot(20);
   res.json({
@@ -594,7 +839,9 @@ app.get("/account/:address/margin", async (req, res) => {
 /**
  * 对冲测算：给定资产估值、对冲比例与杠杆，算出应该开多大的对冲仓位、
  * 需要多少保证金、当前综合保证金（Vault mUSDC + RWA 估值）够不够。
- * 只测算不下单；参考价默认取当前标记价口径（最优卖价 > 成交 TWAP > 最新价）。
+ * 只测算不下单；参考价解析顺序：显式传入 > 标记价预言机（外部喂价 > 成交 TWAP >
+ * 最新价）> 盘口最优卖/买价 > 服务端兜底值（HEDGE_FALLBACK_REF_PRICE），
+ * 实际用了哪一层由 referencePriceSource 如实回传，兜底值不伪装成市场数据。
  * 这是"持有生息 RWA、用永续对冲其价格风险"场景的入口：先算覆盖，再下单。
  */
 app.get("/hedge/quote", async (req, res) => {
@@ -603,17 +850,50 @@ app.get("/hedge/quote", async (req, res) => {
     const lev = leverage === undefined ? 1 : Number(leverage);
     const ratio = hedgeRatioBps === undefined ? 10_000 : Number(hedgeRatioBps);
     let availableMargin = 0n;
+    let marginDiagnostics = null;
     if (address !== undefined) {
       if (!ethers.isAddress(address)) return res.status(400).json({ error: "invalid address" });
       const m = await marginService.getMargin(address);
       availableMargin = m.effectiveMargin;
+      marginDiagnostics = {
+        vaultBalance: m.vaultBalance.toString(),
+        rwaMarginValue: m.rwaMarginValue === null ? null : m.rwaMarginValue.toString(),
+        rwaCounted: m.rwaCounted,
+        sourceErrors: m.sourceErrors,
+      };
     }
-    let ref = referencePrice !== undefined ? toBigIntSafe(referencePrice) : null;
-    if (ref === null) {
-      const mark = await markOracle.getMark();
-      ref = mark?.price ?? book.getBestAsk() ?? book.getBestBid() ?? null;
+    // 参考价：显式传入 > 标记价预言机 > 盘口最优卖价 > 盘口最优买价 > 配置兜底值。
+    // 来源如实回传（referencePriceSource），兜底值不会被伪装成市场数据。
+    const mark = await markOracle.getMark();
+    const explicitRef = referencePrice !== undefined ? toBigIntSafe(referencePrice) : null;
+    if (explicitRef !== null && explicitRef <= 0n) {
+      return res.status(400).json({ error: "referencePrice must be > 0" });
     }
-    if (ref === null) return res.status(503).json({ error: "no reference price available" });
+    const resolved = resolveReferencePrice({
+      explicit: explicitRef,
+      mark,
+      bestAsk: book.getBestAsk(),
+      bestBid: book.getBestBid(),
+      fallback: HEDGE_FALLBACK_REF_PRICE,
+    });
+    if (resolved.price === null) {
+      return res.status(503).json({
+        error: "no reference price available",
+        reason: "no-reference-price",
+        hint:
+          "no external feed, no trades yet, empty order book, and HEDGE_FALLBACK_REF_PRICE is not set — " +
+          "seed the book (demo/seed_counterparty.mjs or POST /admin/seed-book) or pass referencePrice explicitly",
+        missing: buildRefPriceDiagnostics({
+          markFeedConfigured: !!process.env.MARK_PRICE_FEED_URL,
+          markPriceAvailable: mark?.source === "external-feed",
+          tradeSampleCount: mark && mark.source !== "external-feed" ? 1 : 0,
+          bookDepth: (book.getBestAsk() !== null || book.getBestBid() !== null) ? 1 : 0,
+          fallbackConfigured: HEDGE_FALLBACK_REF_PRICE !== null,
+        }),
+        margin: marginDiagnostics,
+      });
+    }
+    const ref = resolved.price;
     const q = computeHedgeQuote({
       assetValue: toBigIntSafe(assetValue ?? "0"),
       hedgeRatioBps: ratio,
@@ -629,8 +909,12 @@ app.get("/hedge/quote", async (req, res) => {
       covered: q.covered,
       shortfall: q.shortfall.toString(),
       referencePrice: ref.toString(),
+      referencePriceSource: resolved.source,
+      referencePriceSourceLabel: (REF_PRICE_SOURCE_LABELS[resolved.source] || REF_PRICE_SOURCE_LABELS.unavailable).zh,
+      referencePriceIsMarketData: resolved.marketData,
       hedgeRatioBps: ratio,
       leverage: lev,
+      margin: marginDiagnostics,
     });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -925,4 +1209,17 @@ if (FUNDING_INTERVAL_MS >= 0) {
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Mini-Dex server listening on http://0.0.0.0:${PORT}`);
+  // 可选：启动即铺一轮演示盘口（SEED_DEMO_LIQUIDITY=1 且盘口为空时）。
+  // 只在盘口空的时候做，绝不覆盖已有挂单；失败只记日志，不影响服务启动。
+  if (SEED_DEMO_LIQUIDITY && demoLiquidity.enabled && book.getBestAsk() === null && book.getBestBid() === null) {
+    setTimeout(() => {
+      demoLiquidity
+        .seed()
+        .then((r) => {
+          broadcastPublic("orderbook", serializeSnapshot(book.getSnapshot(20)));
+          if (r.warnings.length) console.warn("[demo-liquidity] warnings:", r.warnings.join(" | "));
+        })
+        .catch((e) => console.error("[demo-liquidity] startup seeding failed:", e.message));
+    }, 1500);
+  }
 });
