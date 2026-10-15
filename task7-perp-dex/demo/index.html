@@ -33,6 +33,7 @@
   .pill{font-size:11px;padding:2px 8px;border-radius:999px;background:#23272c;}
   .pill.ok{background:#14532d;color:#bbf7d0;}
   .pill.busy{background:#713f12;color:#fde68a;}
+  .pill.err{background:#7f1d1d;color:#fecaca;}
   .row{display:flex;justify-content:space-between;padding:4px 0;font-size:13px;gap:8px;}
   .hint{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5;}
   .hint a{color:var(--red);}
@@ -46,7 +47,7 @@
   button:hover:not(:disabled){filter:brightness(1.12);}
   input:focus,select:focus{outline:2px solid rgba(232,65,66,.55);outline-offset:0;}
   .pill::before{content:'●';margin-right:5px;font-size:9px;vertical-align:1px;}
-  .pill.ok::before{color:#4ade80;} .pill.busy::before{color:#facc15;}
+  .pill.ok::before{color:#4ade80;} .pill.busy::before{color:#facc15;} .pill.err::before{color:#f87171;}
   .steps{max-width:960px;margin:14px auto 0;padding:0 20px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
   .step{background:#15181c;border:1px solid #23272c;border-radius:10px;padding:10px 12px;font-size:12px;color:var(--muted);line-height:1.5;}
   .step b{display:block;color:#fff;font-size:12.5px;margin-bottom:2px;}
@@ -323,10 +324,12 @@ function log(msg, txHash) {
   el.prepend(row);
 }
 
-function setApiStatus(text, cls) {
+const API_PILL_TITLE = '后端 API 健康状态（点击重新检测）';
+function setApiStatus(text, cls, title) {
   const el = document.getElementById('apiStatus');
   el.textContent = text;
   el.className = 'pill' + (cls ? ' ' + cls : '');
+  el.title = title || API_PILL_TITLE;
 }
 
 function readApiUrl() {
@@ -348,47 +351,137 @@ async function parseError(res) {
 }
 
 /**
- * 检测后端是否可用。注意状态语义拆分（之前这里有个显示 bug）：
- * 这个指示灯只表示"后端 API 健康"，与"钱包是否连接"是两回事——
- * 钱包状态由 header 上另一个 walletStatus 指示灯单独表示。
- * 免费层冷启动可能超过单次超时，因此单轮失败只显示"唤醒中"，
- * 由 startHealthMonitor 在后台持续重试，绝不因为第一轮没唤醒
- * 就把灯打成"未连接"再也不恢复（用户手动 curl 已健康也会被误导）。
+ * 后端健康检测（右上角 API 指示灯）。这个灯只表示"后端 API 是否健康"，
+ * 与"钱包是否连接"无关——钱包状态由 header 上另一个 walletStatus 指示灯表示。
+ *
+ * 线上踩过的坑：地址栏里打开 /health 早就返回 ok，页面却一直停在"唤醒中（点击重试）"。原因：
+ * 1. Render 免费层冷启动 / 重新部署（每次 push 到 main 都会触发）期间，请求不会挂起等待，
+ *    而是被 Render 边缘「立刻」回一个 503 加载页。加载页不经过我们的 Express、没有 CORS 头，
+ *    所以页面里的 fetch 会瞬间抛 TypeError（控制台显示成 CORS 报错），而不是等到超时。
+ *    旧逻辑按"轮数"算预算（30 轮 × 5 秒间隔 ≈ 2.5 分钟），唤醒稍慢就永久放弃，
+ *    之后后端醒了也没有任何代码再去检测，灯就一直卡着。
+ * 2. 点击重试是 3 次背靠背的请求，瞬间失败时 1 秒内就结束，等于只探了一下。
+ * 3. 所有失败都被吞掉、统一显示"唤醒中"，看不出是在冷启动还是请求被插件 / 代理拦了。
+ * 现在：按时间退避、页面开着就不放弃；点击 / 切回标签页 / 网络恢复时立即重测；
+ * 失败原因分类后显示在指示灯的悬浮提示和日志里。
  */
 let apiReady = false;
-async function checkApiHealth(attempts = 3, timeoutMs = 20000) {
-  apiUrl = readApiUrl();
-  if (!apiReady) setApiStatus('API: 正在唤醒…', 'busy');
-  for (let i = 1; i <= attempts; i++) {
-    try {
-      const res = await fetchWithTimeout(`${apiUrl}/health`, {}, timeoutMs);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      apiReady = true;
-      setApiStatus(data.settlementEnabled ? 'API: 已就绪（链上结算已开启）' : 'API: 已就绪', 'ok');
-      return data;
-    } catch (e) {
-      if (i < attempts) setApiStatus(`API: 唤醒中，第 ${i + 1} 次重试…`, 'busy');
-    }
+let healthInFlight = null;       // 单飞：后台监测和用户点击共用同一个进行中的检测，不叠加并发请求
+let healthProblem = '';          // 最近一次失败原因（日志去重 + 连接按钮提示用）
+let notReadySince = Date.now();  // 本轮"未就绪"从何时开始，用于显示已等待时长
+const secondsSince = (t) => Math.max(0, Math.round((Date.now() - t) / 1000));
+
+/** 单次探测，不抛异常：返回 { ok: true, data } 或 { ok: false, kind, reason } */
+async function probeHealth(timeoutMs) {
+  const base = readApiUrl();
+  if (!/^https?:\/\/[^/]/i.test(base)) {
+    return { ok: false, kind: 'config', reason: `API 地址无效：「${base || '空'}」，请在“高级设置”里填写完整的 https:// 地址` };
   }
-  if (!apiReady) setApiStatus('API: 唤醒中（点击重试）', 'busy');
-  return null;
+  if (location.protocol === 'https:' && /^http:/i.test(base)) {
+    return { ok: false, kind: 'config', reason: 'HTTPS 页面不能请求 http:// 的 API（混合内容会被浏览器直接拦截），请改用 https:// 地址' };
+  }
+  const url = `${base}/health`;
+  let res;
+  try {
+    res = await fetchWithTimeout(url, { cache: 'no-store' }, timeoutMs);
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      return { ok: false, kind: 'waking', reason: `${Math.round(timeoutMs / 1000)} 秒内没有响应（多半在冷启动）` };
+    }
+    // fetch 失败时浏览器只给页面一个笼统的 TypeError：CORS 拦截、网络不通、插件拦截长得都一样。
+    // 用 no-cors 再探一次：服务器只要回了任何响应（哪怕没有 CORS 头，比如 Render 的 503 加载页）
+    // 就能拿到 opaque 响应；连它都失败，说明请求根本没有到达服务器。
+    let reachable = false;
+    try { await fetchWithTimeout(url, { mode: 'no-cors', cache: 'no-store' }, 10000); reachable = true; } catch {}
+    return reachable
+      ? { ok: false, kind: 'waking', reason: '服务器有响应，但还不是 API —— 通常是 Render 冷启动/重新部署时的加载页（它没有 CORS 头，所以控制台会报 CORS 错误，属正常现象）' }
+      : { ok: false, kind: 'blocked', reason: `请求没能到达服务器（${(e && e.message) || e}）—— 可能被广告拦截/隐私插件、代理/VPN 或网络拦截；可在新标签页打开 ${url} 对比` };
+  }
+  if ([502, 503, 504].includes(res.status)) return { ok: false, kind: 'waking', reason: `HTTP ${res.status}（服务正在启动）` };
+  if (!res.ok) return { ok: false, kind: 'error', reason: `HTTP ${res.status}` };
+  try {
+    const data = await res.json();
+    if (data && data.ok === true) return { ok: true, data };
+    return { ok: false, kind: 'error', reason: '/health 返回内容异常' };
+  } catch {
+    return { ok: false, kind: 'waking', reason: '/health 返回的不是 JSON（可能还是加载页）' };
+  }
 }
 
-/** 页面打开后在后台持续监测/唤醒 API，直到就绪为止（最多约 5 分钟） */
-let healthMonitorStarted = false;
-function startHealthMonitor() {
-  if (healthMonitorStarted) return;
-  healthMonitorStarted = true;
-  (async () => {
-    for (let round = 0; round < 30 && !apiReady; round++) {
-      await checkApiHealth(1, 15000);
-      if (!apiReady) await new Promise((r) => setTimeout(r, 5000));
+/** 检测一次并更新指示灯；就绪返回 /health 数据，否则返回 null（并确保后台监测在跑） */
+async function checkApiHealth(timeoutMs = 15000) {
+  if (healthInFlight) return healthInFlight;
+  healthInFlight = (async () => {
+    apiUrl = readApiUrl();
+    const r = await probeHealth(timeoutMs);
+    if (r.ok) {
+      if (!apiReady) log(`后端 API 已就绪（等待了 ${secondsSince(notReadySince)} 秒）`);
+      apiReady = true;
+      healthProblem = '';
+      setApiStatus(r.data.settlementEnabled ? 'API: 已就绪（链上结算已开启）' : 'API: 已就绪', 'ok');
+      return r.data;
     }
-    if (!apiReady) setApiStatus('API: 暂未就绪（点击重试）', '');
+    if (apiReady) { apiReady = false; notReadySince = Date.now(); }
+    const waited = secondsSince(notReadySince);
+    if (r.reason !== healthProblem) {  // 同一个原因只记一次，避免刷屏
+      log(`后端 API 未就绪：${r.reason}。后台会继续自动检测（已等待 ${waited} 秒）`);
+      console.warn('[API health]', r.kind, r.reason);
+    }
+    healthProblem = r.reason;
+    const tip = `${r.reason}\n后台会继续自动检测；点击可立即重试。`;
+    if (r.kind === 'waking') setApiStatus(`API: 唤醒中…（已等待 ${waited} 秒）`, 'busy', tip);
+    else if (r.kind === 'blocked') setApiStatus('API: 请求被拦截（点击重试）', 'err', tip);
+    else if (r.kind === 'config') setApiStatus('API: 地址无效', 'err', tip);
+    else setApiStatus(`API: 异常 ${r.reason}（点击重试）`, 'err', tip);
+    startHealthMonitor();
+    return null;
+  })();
+  try { return await healthInFlight; } finally { healthInFlight = null; }
+}
+
+/**
+ * 后台监测：只要没就绪就一直测，按"已等待时长"退避（不是按轮数）：
+ * 前 3 分钟每 4 秒、10 分钟内每 10 秒、之后每 30 秒。就绪后自动停止，再次失败时自动重启。
+ */
+let healthMonitorRunning = false;
+let wakeHealthMonitor = null;
+function startHealthMonitor() {
+  if (healthMonitorRunning) return;
+  healthMonitorRunning = true;
+  (async () => {
+    try {
+      while (true) {
+        await checkApiHealth(15000);
+        if (apiReady) break;
+        const waited = secondsSince(notReadySince);
+        const delay = waited < 180 ? 4000 : waited < 600 ? 10000 : 30000;
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, delay);
+          wakeHealthMonitor = () => { clearTimeout(timer); resolve(); };
+        });
+        wakeHealthMonitor = null;
+      }
+    } finally {
+      healthMonitorRunning = false;
+      wakeHealthMonitor = null;
+    }
   })();
 }
-document.getElementById('apiStatus').addEventListener('click', () => { checkApiHealth(3, 20000); });
+
+/** 点击指示灯 / 切回标签页 / 网络恢复：立刻测一次，不用等下一轮 */
+function recheckApiNow(fromUser) {
+  if (fromUser && !healthInFlight) setApiStatus('API: 检测中…', 'busy');
+  if (wakeHealthMonitor) wakeHealthMonitor();  // 后台监测正在等下一轮 → 立即开始
+  else checkApiHealth(15000);                   // 监测已停（已就绪）或检测进行中（单飞会合并）
+}
+document.getElementById('apiStatus').addEventListener('click', () => recheckApiNow(true));
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !apiReady) recheckApiNow(false); });
+window.addEventListener('focus', () => { if (!apiReady) recheckApiNow(false); });
+window.addEventListener('online', () => { if (!apiReady) recheckApiNow(false); });
+document.getElementById('apiUrl').addEventListener('change', () => {
+  apiReady = false; notReadySince = Date.now(); healthProblem = '';
+  recheckApiNow(true);
+});
 
 async function ensureFujiNetwork() {
   const current = await window.ethereum.request({ method: 'eth_chainId' });
@@ -409,8 +502,11 @@ document.getElementById('connectBtn').onclick = async () => {
   try {
     btn.disabled = true;
     if (!window.ethereum) { alert('请安装 MetaMask/Core'); return; }
-    const health = apiReady ? { ok: true } : await checkApiHealth(3, 30000);
-    if (!health) { log('后端 API 未能唤醒，请稍后重试，或检查 API 地址是否正确'); return; }
+    if (!apiReady) await checkApiHealth(30000);
+    if (!apiReady) {
+      log(`后端 API 还没就绪（${healthProblem || '原因未知'}）。页面会在后台继续自动检测，右上角指示灯变绿后再点“连接钱包并登录”`);
+      return;
+    }
 
     await ensureFujiNetwork();
     const provider = new ethers.BrowserProvider(window.ethereum);
