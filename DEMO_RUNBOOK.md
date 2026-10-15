@@ -17,9 +17,10 @@
   彩排不会把正式演示的授权"用掉"。✅ 无干扰。
 - **operator 钱包 gas**：每笔结算消耗少量 Fuji 测试 AVAX。彩排几十笔无碍，但正式演示前
   应确认 operator 地址 AVAX 余额 > 0.1（水龙头可补）。
-- **RWA 金库 TWAP 需要热身**：`MultiCollateralVaultV2.collateralValue()` 在 TWAP 第一个
-  窗口就绪前按 **0** 计。如果正式流程要展示 RWA 估值数字，**至少提前一个 TWAP 窗口**
-  （当前部署 60 秒级，生产建议 10–30 分钟口径）完成存款并 `pokeOracle`，别指望现场存完立刻有数。
+- **RWA 金库 TWAP 需要热身 + 显式推进**：`MultiCollateralVaultV2.deposit()` 会尽力调用 `pokeOracle`，
+  但如果离上一个 checkpoint 不到 60 秒，更新会静默返回 false；时间到后 `view` 读取也不会自行推进。
+  当前演示页新增“推进 TWAP 并刷新估值（链上）”按钮：窗口到期后点一次，确认交易，再刷新账户读数。
+  若要在台上展示，至少提前一个窗口（当前 60 秒；生产建议 10–30 分钟）完成存款与 oracle 更新。
 
 ### 2. 服务端层（会污染，这次已加一键重置）
 SQLite + 内存里会留存：未成交的 GTC 挂单、净仓位（方向/入场价/占用保证金）、成交历史、
@@ -72,7 +73,7 @@ PPT/录屏里引用的历史哈希（如 `0x452c…256`）是"某一次真实发
 
 | # | 评审意见 | 仓库真实状态 | 这次处理 |
 |---|---|---|---|
-| 1 | RWA 金库没接进永续保证金 | **服务层已接**：`server/src/margin.js` 聚合 `totalAccountValue()`，`MARGIN_ENFORCE=true` 时下单前校验；**合约层已接**：`PerpMarginAccount.accountValue()` = 保证金余额 + RWA 估值。但两个"已接"都有前置条件：服务层需配 `MARGIN_QUOTE_USD_PRICE` 才计入（当前 Render 上未配、只展示），合约层的 `PerpMarginAccount` **尚未部署到 Fuji**（README 如实写了"待部署"）。故事最后一公里差的是"部署 + 打开开关"，不是没写。 | 文档如实标注；部署需你的私钥与 Fuji gas，未擅自执行（见文末待办） |
+| 1 | RWA 金库没接进永续保证金 | **读取链路已接、当前保证金未闭环**：服务层能读 `totalAccountValue()`，但当前 Render 没有 quote→mUSDC 换算，账户里只展示 WAVAX 计价的 RWA 值、不计入 `effectiveMargin`；链上 `PerpMarginAccount` 也尚未部署到 Fuji。 | 当前 UI 明确分开展示“已估值”和“已计入”。不要把静态 `MARGIN_QUOTE_USD_PRICE` 当作安全生产预言机；需补带新鲜度/失效处理的价格源与部署后再启用。 |
 | 2 | 没有仓位/杠杆/标记价/资金费/强平，只是现货净额结算 | **对链上 Vault 部分成立，对系统整体已过时**：`matching-engine/src/positions.ts` 有净仓位/VWAP 入场/1–20x 杠杆/维持保证金/强平价，`markOracle.js` 是"外部喂价 > 成交 TWAP > 最新价"的独立标记价，资金费按标记价对指数价溢价结算（无独立指数时费率恒 0），强平有罚金入保险基金+穿仓兜底+坏账记账，且全部落库可恢复。准确的话术仍建议用"**永续交易的保证金与结算层 + 链下仓位引擎**"，因为仓位状态在链下、链上只结算净额。 | 话术边界写入本手册；链上版 `PerpMarginAccount.sol` 已实现同一套规则，差部署 |
 | 3 | 价格来源单一、池子薄、固定 70% 静态折价 | TWAP 防同笔操纵成立；"持续操纵整个窗口+浅池"确实防不住，这是真问题。 | **已改**：动态折价——相邻两个 TWAP 窗口偏离 >10% 后额外打折（封顶再打 5 折），波动越大折扣越狠，且指标本身仍是 TWAP、单笔拉不动（见 `effectiveHaircutBps`）。准入流动性门槛仍未做（需要在 listCollateral 加池子储备下限，建议赛后做）。 |
 | 4 | WebSocket 私有频道无鉴权 | **已修复（评审信息滞后）**：私有推送只认登录发放的 sessionToken，只带 `?address=` 的连接只能看公开订单簿。 | 无需改；正式演示话术可主动提这条已修复+有伪造签名回归测试 |
@@ -96,7 +97,7 @@ PPT/录屏里引用的历史哈希（如 `0x452c…256`）是"某一次真实发
 ## 五、还没做、按性价比排序的待办
 1. **部署 `PerpMarginAccount` 到 Fuji 并把地址写进 README**（半天，含部署后冒烟）——直接补上 #1/#8 的最后一公里，是所有待办里对评审感知提升最大的一件。需要部署钱包私钥+Fuji 测试 AVAX，脚本 `DeployPerpMarginAccount.s.sol` 已就绪。注意脚本默认 `QUOTE_PRICE_E6=35_000_000`、初始标记价 2500，部署时按当时 WAVAX 市价改。
 2. **轮换 demo operator 私钥并从 DEPLOY.md 移除明文**（10 分钟）——安全观感问题，越早越好。
-3. **Render 上配 `MARGIN_QUOTE_USD_PRICE` 让 RWA 估值真正"计入"（仍保持 MARGIN_ENFORCE=false 只展示）**（5 分钟配置）——让评委点开页面就看到 RWA 估值进入可用保证金，而不是"未计入"。
+3. **安全接入 quote→mUSDC 价格源**（不能只填一个静态 `MARGIN_QUOTE_USD_PRICE` 就宣称已完成）——当前页面只展示 WAVAX 计价的 RWA 估值；只有在价格源具备新鲜度/失效保护、精度换算经过测试后，才应让它进入可用保证金。短期演示继续如实标注“未计入”，保持 `MARGIN_ENFORCE=false`。
 4. 给 `listCollateral` 加最低流动性门槛（池子储备下限）+ README 补 RWA 准入流程一节。
 5. 价格精度改造后接真实 AVAX 指数价（标记价与盘口同锚），再考虑多抵押品 USD 价格表。
 6. owner/operator 换多签（Safe）+ 关键参数时间锁。
@@ -106,3 +107,19 @@ PPT/录屏里引用的历史哈希（如 `0x452c…256`）是"某一次真实发
 - 引擎：`OrderBook/PositionManager/TwapMarkPrice.reset()` + 2 个新单测（共 45 个全过）。
 - 服务端：`/admin/reset-demo`、`parseFeedPrice` 多形状喂价解析、`test-feedparse.mjs`（本地通过）。
 - 运维：CI + Pages 自动发布两个 workflow；`render.yaml` 增加 `ADMIN_RESET_TOKEN`（sync:false，不入库明文）。
+
+## 七、演示现场复盘（2026-10-15）
+
+用户贴出的日志显示：钱包登录、mUSDC 领取/授权/存入、RWA 授权/存入都已完成；但三次 `no reference price available` 是 `/hedge/quote` 的测算请求失败，**不是链上交易，也没有 perp 成交或扣款**。失败原因是标记价外部喂价未配、成交历史为空、盘口无最佳买卖价。它与 RWA 金库的 WAVAX-TWAP 抵押估值是两条不同链路。
+
+账户里的 `0.279999999999999999` 是 quote token（当前 WAVAX，18 位小数）计价的 RWA 链上 TWAP 折价估值；不是 0.28 mUSDC。当前服务端没有安全 quote→mUSDC 换算，所以 `effectiveMargin=1000 mUSDC` 只等于 VaultV2 余额，RWA 值虽显示但未计入。页面改为按 4 位小数展示 `0.28 WAVAX`，并在标题提示完整原始值及未计入原因。
+
+本次 UI / 服务端处理：
+- 可选“演示导览”默认不显示提词内容；“讲稿”开关才显示讲解要点；可单独重新开始导览，完成检测不会阻止重走。
+- 顶部从 1–4 编号教学卡改为一行工作流地图；演示控制台折叠，提供自检、刷新、清空、铺盘、全部重跑和链上提款。提款前检查当前净仓位为 0。
+- `/demo/status` 明确核心必需项与可选项；`/hedge/quote` 参考价来源会明示市场数据或配置兜底。无数据时返回每一层缺失原因与补齐方式；前端对旧服务端也会用一个明确标注的本地演示值重试，避免停在裸英文错误上。
+- 新增 `/admin/seed-book` 和服务端 `DemoLiquidity`，但只在配置 `ADMIN_RESET_TOKEN` 后开放；买盘带真实 EIP-712 授权，且检查做市钱包 Vault 余额。还新增本地 `demo/seed_counterparty.mjs` 和 `demo/fund_demo_maker.mjs`。
+- TWAP 不会“等 60 秒自动更新”：若存入时窗口没到，需等足 60 秒后调用 `pokeOracle`。前端现有单独链上按钮会先预检时间窗，再提交更新交易。
+- 页面与讲稿不再声称测试代币是真实房产、配置兜底价是真实行情，或当前合成盘口可以完整对冲 SRT-RWA。
+
+演示稿见仓库根目录 `DEMO_PRESENTATION_SCRIPT.md`。

@@ -31,7 +31,22 @@ services:
         value: "10"
       - key: OPERATOR_PRIVATE_KEY
         sync: false
-      # 演示彩排重置开关：设置后可用 POST /admin/reset-demo（x-admin-token 头）
-      # 清空订单簿/仓位回到干净状态；不设置则该端点禁用。见 DEMO_RUNBOOK.md。
+      # 演示做市钱包：仅用于 Fuji 测试币。要启用服务端一键铺双边盘口，
+      # 需先用 demo/fund_demo_maker.mjs 让它在 VaultV2 中持有测试 mUSDC。
+      - key: DEMO_MAKER_PRIVATE_KEY
+        sync: false
+      - key: DEMO_MID_PRICE
+        value: "2500"
+      - key: DEMO_LIQUIDITY_BASE_QTY
+        value: "100"
+      # 留空盘口仍可测算，但会标记为“配置兜底值”，不是市场行情；
+      # 真实市场参考价要用成交 TWAP / 盘口或单独配置价格源。
+      - key: HEDGE_FALLBACK_REF_PRICE
+        value: "2500"
+      # 如设为 true，服务启动时只在空盘口铺一次；默认关闭，现场可手动点“铺盘口”。
+      - key: SEED_DEMO_LIQUIDITY
+        value: "false"
+      # 演示彩排重置/铺盘口开关：必须设置该令牌，两个 /admin 端点才会启用；
+      # 绝不要提交明文。见 DEMO_RUNBOOK.md。
       - key: ADMIN_RESET_TOKEN
         sync: false
