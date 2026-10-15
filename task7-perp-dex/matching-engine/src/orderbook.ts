@@ -60,6 +60,17 @@ export class OrderBook {
     if (Number.isFinite(idNum) && idNum > this.tradeSeq) this.tradeSeq = idNum;
   }
 
+  /** 清空全部盘口/订单/成交与序号（演示彩排后重置到干净状态用；调用方负责同步清库） */
+  reset(): void {
+    this.bids = [];
+    this.asks = [];
+    this.ordersById.clear();
+    this.trades.length = 0;
+    this.seq = 0;
+    this.orderSeq = 0;
+    this.tradeSeq = 0;
+  }
+
   /** 判断 taker 是否可以和 maker 的价格发生撮合 */
   private crosses(takerSide: "buy" | "sell", takerPrice: bigint | null, makerPrice: bigint): boolean {
     if (takerPrice === null) return true; // 市价单永远可以吃到对手盘（只要对手盘存在）

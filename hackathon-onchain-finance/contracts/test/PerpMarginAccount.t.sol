@@ -118,6 +118,18 @@ contract PerpMarginAccountTest is Test {
         vault.withdraw(56_000); // 自由只有 60000-5000=55000
     }
 
+    /// @notice 回归：只有 RWA 估值、没存过保证金代币时，freeMargin 虽 >0，
+    ///         withdraw 也必须以业务错误回滚（修复前是算术 panic 0x11，
+    ///         且语义上等于拿 RWA 估值套现合约并不持有的保证金代币）。
+    function test_WithdrawRwaOnlyCannotCashOutMarginToken() public {
+        valuer.setValue(alice, 0.1e18); // 约合 $3.50 的 RWA 估值
+        assertGt(vault.freeMargin(alice), 0);
+        assertEq(vault.marginBalance(alice), 0);
+        vm.prank(alice);
+        vm.expectRevert(PerpMarginAccount.InsufficientFreeMargin.selector);
+        vault.withdraw(1);
+    }
+
     // ---------- RWA 估值在合约层计入保证金（核心绑定） ----------
 
     function test_RwaCollateralValueCountsAsMarginOnChain() public {

@@ -2,7 +2,10 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<title>AvaVault Perp — 链上永续合约 Demo</title>
+<title>AvaVault Perp — RWA 永续保证金 · RWA-Collateralized Perpetual Margin</title>
+<meta name="description" content="AvaVault Perp：生息 RWA 不卖出、不借款，直接成为永续合约保证金。TWAP 链上估值、EIP-712 授权结算，Avalanche Fuji 真实部署。" />
+<meta name="theme-color" content="#0b0d10" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23E84142'/%3E%3Cpath d='M16 6 L26 24 L21.5 24 L16 13.5 L10.5 24 L6 24 Z' fill='white'/%3E%3C/svg%3E" />
 <script src="./vendor/ethers.umd.min.js"></script>
 <style>
   :root{--red:#E84142;--bg:#0b0d10;--card:#15181c;--text:#eee;--muted:#9aa4af;--green:#2ecc71;}
@@ -34,13 +37,60 @@
   .hint{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5;}
   .hint a{color:var(--red);}
   .addr{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;word-break:break-all;text-align:right;}
+  /* ---- 演示打磨层（只改观感，不动布局语义） ---- */
+  body{background:radial-gradient(1200px 600px at 80% -10%,#2a0f12 0%,var(--bg) 55%);}
+  header{position:sticky;top:0;z-index:10;background:rgba(11,13,16,.92);backdrop-filter:blur(8px);}
+  header h1{letter-spacing:.3px;}
+  .card{box-shadow:0 8px 24px rgba(0,0,0,.35);}
+  .card h3{margin-top:0;font-size:14px;letter-spacing:.4px;}
+  button:hover:not(:disabled){filter:brightness(1.12);}
+  input:focus,select:focus{outline:2px solid rgba(232,65,66,.55);outline-offset:0;}
+  .pill::before{content:'●';margin-right:5px;font-size:9px;vertical-align:1px;}
+  .pill.ok::before{color:#4ade80;} .pill.busy::before{color:#facc15;}
+  .steps{max-width:960px;margin:14px auto 0;padding:0 20px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+  .step{background:#15181c;border:1px solid #23272c;border-radius:10px;padding:10px 12px;font-size:12px;color:var(--muted);line-height:1.5;}
+  .step b{display:block;color:#fff;font-size:12.5px;margin-bottom:2px;}
+  .step b i{font-style:normal;color:var(--red);margin-right:6px;}
+  @media (max-width:760px){main{grid-template-columns:1fr;}.steps{grid-template-columns:1fr 1fr;}}
+
+  /* ---- 商业化视觉层：品牌、层级、数字排版 ---- */
+  :root{--line:#262c33;--num:ui-monospace,'SF Mono',Menlo,Consolas,monospace;}
+  body{font-feature-settings:'tnum' 1,'cv05' 1;-webkit-font-smoothing:antialiased;}
+  .card{border-color:var(--line);border-radius:16px;}
+  .card h3{display:flex;align-items:center;gap:8px;}
+  .card h3::before{content:'';width:3px;height:14px;border-radius:2px;background:var(--red);display:inline-block;}
+  td,.row span:last-child{font-variant-numeric:tabular-nums;}
+  .log,td{font-family:var(--num);}
+  button{transition:filter .15s ease,transform .05s ease;}
+  button:active:not(:disabled){transform:translateY(1px);}
+  button:not(.secondary){background:linear-gradient(180deg,#f05253,#d93434);}
+  .step b i{background:var(--red);color:#fff;border-radius:50%;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;}
+  tbody tr:hover td{background:rgba(255,255,255,.025);}
+  ::selection{background:rgba(232,65,66,.4);}
+
+  /* 品牌签名：不喊口号，用字距/渐变/细线做排版 */
+  .tagline{display:flex;align-items:center;gap:10px;margin-top:3px;}
+  .tagline-zh{font-size:12px;letter-spacing:.42em;color:#e8ecf0;font-weight:600;}
+  .tagline-dot{width:4px;height:4px;border-radius:50%;background:var(--red);flex:none;box-shadow:0 0 8px rgba(232,65,66,.9);}
+  .tagline-en{font-family:Georgia,'Times New Roman',serif;font-style:italic;font-size:12.5px;letter-spacing:.14em;background:linear-gradient(90deg,#f3f4f6,#9aa4af);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;}
 </style>
 </head>
 <body>
 <header>
-  <h1>AvaVault <span>Perp</span> — 链上永续合约 Demo</h1>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <svg width="34" height="34" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#E84142"/><path d="M16 6 L26 24 L21.5 24 L16 13.5 L10.5 24 L6 24 Z" fill="white"/></svg>
+    <div>
+      <h1>AvaVault <span>Perp</span></h1>
+      <div class="tagline"><span class="tagline-zh">生息 RWA</span><span class="tagline-dot"></span><span class="tagline-en">Perpetual Margin</span></div>
+    </div>
+  </div>
   <div>
-    <span id="apiStatus" class="pill busy">API: 检测中…</span>
+    <span id="apiStatus" class="pill busy" title="后端 API 健康状态（点击重新检测）" style="cursor:pointer;">API: 检测中…</span>
+    <span id="walletStatus" class="pill">钱包: 未连接</span>
+    <select id="langSel" style="width:auto;padding:6px;margin:0;" title="Language">
+      <option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="en">English</option>
+    </select>
+    <button id="guideBtn" class="secondary">▶ 新手引导</button>
     <button id="connectBtn">连接钱包并登录</button>
   </div>
 </header>
@@ -51,10 +101,17 @@
     <a href="https://testnet.snowtrace.io/address/0x0425352bc3c5293D5629c27525969439Ab9C27b5" target="_blank" style="color:#E84142;">Snowtrace</a>
   </div>
 </div>
+<div class="steps">
+  <div class="step"><b><i>1</i>存入 RWA 抵押</b>生息资产直接进金库，不卖出、不借款</div>
+  <div class="step"><b><i>2</i>TWAP 折价估值</b>合约读链上均价打七折，操纵现价无效</div>
+  <div class="step"><b><i>3</i>测算对冲仓位</b>按资产估值与对冲比例算出空单大小</div>
+  <div class="step"><b><i>4</i>成交并链上结算</b>每笔结算上链，Snowtrace 当场可查</div>
+</div>
 <main>
   <div class="card">
     <h3>账户</h3>
     <div class="row"><span class="muted">地址</span><span id="account" class="addr">未连接</span></div>
+    <div class="row" title="钱包自检（仅自己看）"><span class="muted" style="font-size:10px;">状态</span><span id="roleHint" style="font-size:10px;color:#5c6670;">-</span></div>
     <div class="row"><span class="muted">链上 Vault 保证金余额</span><span id="vaultBalance">-</span></div>
     <div class="row"><span class="muted">RWA 抵押估值（MultiCollateralVault）</span><span id="rwaValue">-</span></div>
     <div class="row"><span class="muted">综合可用保证金</span><span id="effectiveMargin">-</span></div>
@@ -67,6 +124,41 @@
     <div class="hint">
       存入后成交才能完成链上结算（结算从买方 Vault 余额中扣款）。存入需要支付少量 Fuji 测试网
       AVAX 作为 gas，可在 <a href="https://faucet.avax.network/" target="_blank">Avalanche Faucet</a> 领取。
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>RWA 抵押（把生息资产直接变保证金）</h3>
+    <div class="row"><span class="muted">钱包 SRT-RWA 余额</span><span id="rwaWalletBal">-</span></div>
+    <div class="row"><span class="muted">已存入金库的 RWA</span><span id="rwaVaultBal">-</span></div>
+    <div class="row"><span class="muted">金库 TWAP 折价估值</span><span id="rwaValue2">-</span></div>
+    <label>存入数量（SRT-RWA）</label>
+    <input id="rwaAmount" value="100" inputmode="numeric" />
+    <button id="rwaDepositBtn" class="secondary" disabled>授权并存入 RWA 到 MultiCollateralVaultV2</button>
+    <div class="hint">
+      存入的是真实 Fuji 合约交易，估值由链上 TWAP 窗口决定：刚存入时估值可能先显示 0，
+      要等 TWAP 窗口走完才计入保证金（宁可先按 0 算，也不拿可被操纵的瞬时价格当保证金）。
+      演示钱包需预先持有 SRT-RWA（发行方分配），没有余额时此按钮不可用。
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>对冲测算（持有 RWA → 开多大的对冲仓位）</h3>
+    <label>想对冲的资产估值（与保证金同单位，整数）</label>
+    <input id="hedgeAssetValue" value="250000" inputmode="numeric" />
+    <label>对冲比例 %（100 = 全额对冲）</label>
+    <input id="hedgeRatio" value="100" inputmode="numeric" />
+    <label>参考价格（留空用当前标记价）</label>
+    <input id="hedgeRefPrice" placeholder="例如 2500" inputmode="numeric" />
+    <button id="hedgeQuoteBtn" class="secondary" disabled>计算对冲仓位</button>
+    <div class="row"><span class="muted">对冲名义价值</span><span id="hedgeNotional">-</span></div>
+    <div class="row"><span class="muted">建议空单数量</span><span id="hedgeQty">-</span></div>
+    <div class="row"><span class="muted">所需保证金 / 可用</span><span id="hedgeMargin">-</span></div>
+    <div class="row"><span class="muted">保证金是否覆盖</span><span id="hedgeCovered">-</span></div>
+    <button id="hedgeFillBtn" class="secondary" disabled>按测算结果填入空单（卖出）</button>
+    <div class="hint">
+      逻辑：对冲名义 = 资产估值 × 对冲比例；数量 = 名义 ÷ 参考价；占用 = 名义 ÷ 杠杆。
+      当前演示市场是示例标的，只用于看清保证金占用与强平价；真实对冲时换成与资产相关的指数市场，保证金层不变。
     </div>
   </div>
 
@@ -136,10 +228,42 @@
     <div class="row"><span>WAVAX/RWA 定价池（LFJ）</span><a href="https://testnet.snowtrace.io/address/0x7590d84174571d89732451bb77BB4C38F7183b85" target="_blank" style="color:#E84142;">0x7590…3b85</a></div>
   </div>
 
+
+  <div class="card full">
+    <h3>设计依据 · Design References</h3>
+    <div class="row"><span>TWAP 预言机（防同笔价格操纵）</span><a href="https://uniswap.org/whitepaper.pdf" target="_blank" style="color:#E84142;">Uniswap V2 Whitepaper · ExampleOracleSimple</a></div>
+    <div class="row"><span>签名授权结算（operator 权限边界）</span><a href="https://eips.ethereum.org/EIPS/eip-712" target="_blank" style="color:#E84142;">EIP-712 Typed Structured Data</a></div>
+    <div class="row"><span>链下撮合 / 链上净额结算</span><span style="color:#9aa4af;">0x / dYdX v3 同类信任模型（见仓库 SECURITY_REVIEW.md）</span></div>
+    <div class="row"><span>强平 · 保险基金 · 坏账隔离</span><span style="color:#9aa4af;">永续合约通行清算设计（维持保证金 5% · 罚金 0.5%）</span></div>
+    <div class="hint">每一项关键机制都能对应到公开规范或已审计协议的同类做法，并有本仓库的链上攻击实验与回归测试佐证（伪造签名被拒、砸盘操纵无效，均可在 Snowtrace 复查）。</div>
+  </div>
+
   <div class="card full">
     <h3>日志 / 成交回报</h3>
     <div class="log" id="log"><div>等待连接...</div></div>
   </div>
+
+<div id="tourMask" style="display:none;position:fixed;inset:0;z-index:50;pointer-events:none;">
+  <div id="tourBox" style="position:absolute;border:2px solid #E84142;border-radius:12px;box-shadow:0 0 0 9999px rgba(0,0,0,.55);transition:all .35s;"></div>
+</div>
+<div id="tourPanel" style="display:none;position:fixed;right:18px;bottom:18px;z-index:60;width:min(430px,92vw);background:#171b20;border:1px solid #333a42;border-radius:14px;padding:16px 18px;box-shadow:0 18px 50px rgba(0,0,0,.6);">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+    <b id="tourTitle" style="font-size:15px;"></b>
+    <span id="tourProg" style="font-size:11px;color:#9aa4af;"></span>
+  </div>
+  <div id="tourBody" style="font-size:13px;line-height:1.75;margin-top:8px;color:#d7dde3;"></div>
+  <div style="margin-top:10px;background:#0f1114;border:1px solid #23272c;border-radius:10px;padding:9px 11px;">
+    <div style="font-size:11px;color:#E84142;font-weight:700;" id="tourSayLabel">照着念</div>
+    <div id="tourSay" style="font-size:12.5px;line-height:1.7;color:#fde68a;margin-top:3px;"></div>
+  </div>
+  <div id="tourState" style="font-size:11.5px;margin-top:9px;color:#9aa4af;"></div>
+  <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+    <button id="tourPrev" class="secondary small">上一步</button>
+    <button id="tourNext" class="small">下一步</button>
+    <button id="tourDone" class="small">我已完成</button>
+    <button id="tourExit" class="secondary small">退出引导</button>
+  </div>
+</div>
 </main>
 
 <script>
@@ -158,11 +282,24 @@ const SNOWTRACE = 'https://testnet.snowtrace.io';
 // Fuji 上已部署的演示合约（mUSDC 可公开领取，Vault 为签名授权结算的 V2 版本）
 const MOCK_USDC = '0x206d1B4D35c1f081C82939F1d97A05B5cb5BEF93';
 const VAULT_V2 = '0x0425352bc3c5293D5629c27525969439Ab9C27b5';
+const RWA_TOKEN = '0x1cC1650E2Da5c2357c811B90187D1022b70B70Ad';
+const MC_VAULT_V2 = '0xb999cb61A4fb2FE71d1C5FBA7aD506F619dD7884';
 const ERC20_ABI = [
   'function faucet(uint256 amount) external',
   'function approve(address spender, uint256 amount) external returns (bool)',
 ];
 const VAULT_ABI = ['function deposit(uint256 amount) external'];
+const RWA_ABI = [
+  'function balanceOf(address) view returns (uint256)',
+  'function approve(address spender, uint256 amount) external returns (bool)',
+  'function decimals() view returns (uint8)',
+  'function owner() view returns (address)',
+];
+const MC_VAULT_ABI = [
+  'function deposit(address token, uint256 amount) external',
+  'function rawBalance(address user, address token) view returns (uint256)',
+  'function owner() view returns (address)',
+];
 
 let signer, account, apiUrl, ws, settlementDomainCache, sessionToken;
 let latestBestBid = null, latestBestAsk = null;
@@ -211,26 +348,47 @@ async function parseError(res) {
 }
 
 /**
- * 检测后端是否可用。免费层实例休眠后第一次请求需要等待其唤醒，
- * 因此这里用较长的单次超时并自动重试，而不是第一次失败就报错。
+ * 检测后端是否可用。注意状态语义拆分（之前这里有个显示 bug）：
+ * 这个指示灯只表示"后端 API 健康"，与"钱包是否连接"是两回事——
+ * 钱包状态由 header 上另一个 walletStatus 指示灯单独表示。
+ * 免费层冷启动可能超过单次超时，因此单轮失败只显示"唤醒中"，
+ * 由 startHealthMonitor 在后台持续重试，绝不因为第一轮没唤醒
+ * 就把灯打成"未连接"再也不恢复（用户手动 curl 已健康也会被误导）。
  */
-async function checkApiHealth(attempts = 3) {
+let apiReady = false;
+async function checkApiHealth(attempts = 3, timeoutMs = 20000) {
   apiUrl = readApiUrl();
-  setApiStatus('API: 正在唤醒…', 'busy');
+  if (!apiReady) setApiStatus('API: 正在唤醒…', 'busy');
   for (let i = 1; i <= attempts; i++) {
     try {
-      const res = await fetchWithTimeout(`${apiUrl}/health`, {}, 60000);
+      const res = await fetchWithTimeout(`${apiUrl}/health`, {}, timeoutMs);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      apiReady = true;
       setApiStatus(data.settlementEnabled ? 'API: 已就绪（链上结算已开启）' : 'API: 已就绪', 'ok');
       return data;
     } catch (e) {
       if (i < attempts) setApiStatus(`API: 唤醒中，第 ${i + 1} 次重试…`, 'busy');
     }
   }
-  setApiStatus('API: 未连接', '');
+  if (!apiReady) setApiStatus('API: 唤醒中（点击重试）', 'busy');
   return null;
 }
+
+/** 页面打开后在后台持续监测/唤醒 API，直到就绪为止（最多约 5 分钟） */
+let healthMonitorStarted = false;
+function startHealthMonitor() {
+  if (healthMonitorStarted) return;
+  healthMonitorStarted = true;
+  (async () => {
+    for (let round = 0; round < 30 && !apiReady; round++) {
+      await checkApiHealth(1, 15000);
+      if (!apiReady) await new Promise((r) => setTimeout(r, 5000));
+    }
+    if (!apiReady) setApiStatus('API: 暂未就绪（点击重试）', '');
+  })();
+}
+document.getElementById('apiStatus').addEventListener('click', () => { checkApiHealth(3, 20000); });
 
 async function ensureFujiNetwork() {
   const current = await window.ethereum.request({ method: 'eth_chainId' });
@@ -251,7 +409,7 @@ document.getElementById('connectBtn').onclick = async () => {
   try {
     btn.disabled = true;
     if (!window.ethereum) { alert('请安装 MetaMask/Core'); return; }
-    const health = await checkApiHealth();
+    const health = apiReady ? { ok: true } : await checkApiHealth(3, 30000);
     if (!health) { log('后端 API 未能唤醒，请稍后重试，或检查 API 地址是否正确'); return; }
 
     await ensureFujiNetwork();
@@ -271,11 +429,15 @@ document.getElementById('connectBtn').onclick = async () => {
     if (!res.ok) throw new Error(await parseError(res));
     sessionToken = (await res.json()).sessionToken || null;
     setApiStatus('API: 已登录', 'ok');
+    document.getElementById('walletStatus').textContent = '钱包: ' + shortAddr(account);
+    document.getElementById('walletStatus').className = 'pill ok';
     log('登录成功: ' + account);
     document.getElementById('placeOrderBtn').disabled = false;
     document.getElementById('depositBtn').disabled = false;
+    document.getElementById('hedgeQuoteBtn').disabled = false;
 
     await refreshBalance();
+    await refreshRwa();
     await Promise.all([refreshMyOrders(), refreshTrades(), refreshPosition()]);
     connectWs();
   } catch (e) { log('连接失败: ' + e.message); }
@@ -338,6 +500,105 @@ document.getElementById('depositBtn').onclick = async () => {
   } catch (e) {
     log('存入保证金失败: ' + (e.shortMessage || e.message) + '（常见原因是钱包缺少 Fuji 测试网 AVAX 支付 gas）');
   } finally { btn.disabled = false; }
+};
+
+// ---------- RWA 抵押：真实读取 + 真实存入 MultiCollateralVaultV2 ----------
+let rwaDecimals = 18;
+async function refreshRwa() {
+  if (!signer || !account) return;
+  try {
+    const rwa = new ethers.Contract(RWA_TOKEN, RWA_ABI, signer);
+    const mc = new ethers.Contract(MC_VAULT_V2, MC_VAULT_ABI, signer);
+    rwaDecimals = Number(await rwa.decimals());
+    const walletBal = await rwa.balanceOf(account);
+    const vaultBal = await mc.rawBalance(account, RWA_TOKEN);
+    document.getElementById('rwaWalletBal').textContent = ethers.formatUnits(walletBal, rwaDecimals) + ' SRT-RWA';
+    document.getElementById('rwaVaultBal').textContent = ethers.formatUnits(vaultBal, rwaDecimals) + ' SRT-RWA';
+    document.getElementById('rwaDepositBtn').disabled = walletBal <= 0n;
+    const src = document.getElementById('rwaValue');
+    document.getElementById('rwaValue2').textContent = src ? src.textContent : '-';
+    // 隐蔽自检：悄悄核对当前钱包是不是资产方（owner/持仓），结果只落在
+    // 账户区一行 10px 灰字 + 浏览器控制台里，演示画面上不展开、不弹窗。
+    try {
+      const [rwaOwner, mcOwner] = await Promise.all([rwa.owner(), mc.owner()]);
+      const me = account.toLowerCase();
+      const isAssetSide = me === rwaOwner.toLowerCase() || me === mcOwner.toLowerCase();
+      const hint = document.getElementById('roleHint');
+      if (isAssetSide && walletBal > 0n) { hint.textContent = '● 就绪'; hint.style.color = '#3fb950'; }
+      else if (walletBal > 0n) { hint.textContent = '● 有持仓'; hint.style.color = '#d29922'; }
+      else if (isAssetSide) { hint.textContent = '● 资产方（无持仓）'; hint.style.color = '#d29922'; }
+      else { hint.textContent = '● 普通账户'; hint.style.color = '#5c6670'; }
+      console.info('[wallet-check]', { account, isAssetSide, rwaOwner, mcOwner, rwaBalance: walletBal.toString(), vaultRwa: vaultBal.toString() });
+    } catch {}
+  } catch (e) { log('读取 RWA 余额失败: ' + e.message); }
+}
+
+document.getElementById('rwaDepositBtn').onclick = async () => {
+  const btn = document.getElementById('rwaDepositBtn');
+  try {
+    btn.disabled = true;
+    await ensureFujiNetwork();
+    const raw = document.getElementById('rwaAmount').value.trim();
+    if (!/^\d+$/.test(raw) || BigInt(raw) <= 0n) { log('存入 RWA 失败: 数量必须是正整数'); return; }
+    const amount = BigInt(raw) * 10n ** BigInt(rwaDecimals);
+    const rwa = new ethers.Contract(RWA_TOKEN, RWA_ABI, signer);
+    const mc = new ethers.Contract(MC_VAULT_V2, MC_VAULT_ABI, signer);
+    log('正在授权 MultiCollateralVaultV2 使用 SRT-RWA…（请在钱包确认）');
+    const approveTx = await rwa.approve(MC_VAULT_V2, amount);
+    await approveTx.wait();
+    log('RWA 授权完成', approveTx.hash);
+    log('正在把 RWA 存入金库作为保证金…（请在钱包确认）');
+    const depTx = await mc.deposit(RWA_TOKEN, amount);
+    await depTx.wait();
+    log('RWA 存入完成，TWAP 窗口走完后估值将计入保证金', depTx.hash);
+    await refreshRwa();
+    await refreshBalance();
+    await refreshRwa();
+  } catch (e) {
+    log('存入 RWA 失败: ' + (e.shortMessage || e.message));
+  } finally {
+    await refreshRwa().catch(() => {});
+  }
+};
+
+// ---------- 对冲测算：后端按保证金覆盖规则计算建议空单 ----------
+let lastHedgeQuote = null;
+document.getElementById('hedgeQuoteBtn').onclick = async () => {
+  const btn = document.getElementById('hedgeQuoteBtn');
+  try {
+    btn.disabled = true;
+    const assetValue = document.getElementById('hedgeAssetValue').value.trim();
+    const ratioPct = Number(document.getElementById('hedgeRatio').value.trim());
+    const refPrice = document.getElementById('hedgeRefPrice').value.trim();
+    const leverage = document.getElementById('leverage').value;
+    if (!/^\d+$/.test(assetValue) || !Number.isFinite(ratioPct) || ratioPct <= 0 || ratioPct > 100) {
+      log('对冲测算失败: 资产估值须为正整数、对冲比例须在 (0,100]'); return;
+    }
+    const params = new URLSearchParams({
+      address: account, assetValue, hedgeRatioBps: String(Math.round(ratioPct * 100)), leverage,
+    });
+    if (refPrice) params.set('referencePrice', refPrice);
+    const res = await fetch(`${apiUrl}/hedge/quote?${params}`);
+    const q = await res.json();
+    if (!res.ok) throw new Error(q.error || `HTTP ${res.status}`);
+    lastHedgeQuote = q;
+    document.getElementById('hedgeNotional').textContent = q.notional;
+    document.getElementById('hedgeQty').textContent = q.quantity;
+    document.getElementById('hedgeMargin').textContent = `${q.requiredMargin} / ${q.availableMargin}`;
+    document.getElementById('hedgeCovered').textContent = q.covered ? '足够覆盖' : `不足，缺 ${q.shortfall}`;
+    document.getElementById('hedgeFillBtn').disabled = BigInt(q.quantity) <= 0n;
+    log(`对冲测算: 名义 ${q.notional}，建议空单 ${q.quantity} @参考价 ${q.referencePrice}，保证金覆盖=${q.covered}`);
+  } catch (e) { log('对冲测算失败: ' + e.message); }
+  finally { btn.disabled = false; }
+};
+
+document.getElementById('hedgeFillBtn').onclick = () => {
+  if (!lastHedgeQuote) return;
+  document.getElementById('side').value = 'sell';
+  document.getElementById('orderType').value = 'limit'; syncOrderType();
+  document.getElementById('price').value = lastHedgeQuote.referencePrice;
+  document.getElementById('quantity').value = lastHedgeQuote.quantity;
+  log('已按对冲测算填入空单，请确认后点击“下单”');
 };
 
 function connectWs() {
@@ -679,8 +940,157 @@ document.getElementById('placeOrderBtn').onclick = async () => {
   finally { btn.disabled = false; }
 };
 
-// 打开页面就先唤醒后端（免费层休眠唤醒需要时间），等用户连钱包时通常已经就绪
-checkApiHealth();
+// 打开页面就在后台唤醒并持续监测后端（免费层休眠唤醒需要时间），等用户连钱包时通常已经就绪
+
+// ===============================================================
+// 新手引导 + 三语切换（简体/繁體/English）
+// 设计原则：引导只做"高亮 + 讲解 + 检测"，绝不代替用户点任何按钮、
+// 绝不发交易；每一步都能手动跳过，元素不存在时自动跳过该步，
+// 因此它永远不会把正常演示流程卡死。
+// ===============================================================
+let LANG = localStorage.getItem('avavault-lang') || 'zh-CN';
+
+const TOUR_STEPS = [
+  { target: '#apiStatus',
+    title: {'zh-CN':'第 1 步 · 等后端醒来','zh-TW':'第 1 步 · 等後端醒來',en:'Step 1 · Wake the backend'},
+    body: {'zh-CN':'页面打开后会自动唤醒后端（免费服务休眠时约需 30–60 秒）。等右上角 API 指示灯变绿再继续，不用刷新页面。','zh-TW':'頁面打開後會自動喚醒後端（免費服務休眠時約需 30–60 秒）。等右上角 API 指示燈變綠再繼續，不用重新整理頁面。',en:'The page wakes the backend automatically (free tier may need 30–60s). Wait until the API pill turns green — no refresh needed.'},
+    say: {'zh-CN':'我们先等后端就绪——所有数据都是实时的，不是一张截图。','zh-TW':'我們先等後端就緒——所有數據都是即時的，不是一張截圖。',en:'First, the backend wakes up — everything you will see is live, not a screenshot.'},
+    done: () => apiReady },
+  { target: '#connectBtn',
+    title: {'zh-CN':'第 2 步 · 连接房东钱包','zh-TW':'第 2 步 · 連接房東錢包',en:'Step 2 · Connect the owner wallet'},
+    body: {'zh-CN':'点击“连接钱包并登录”，选房东账户（持有 RWA 的那个），在钱包里确认切到 Fuji 网络并签名登录。','zh-TW':'點擊「連接錢包並登入」，選房東帳戶（持有 RWA 的那個），在錢包裡確認切到 Fuji 網路並簽名登入。',en:'Click “Connect & Login”, pick the wallet that holds the RWA, confirm Fuji network and sign the login message.'},
+    say: {'zh-CN':'这位持有人有一份正在出租的链上房产，他只担心一件事：房价下跌。','zh-TW':'這位持有人有一份正在出租的鏈上房產，他只擔心一件事：房價下跌。',en:'Our holder owns a rented on-chain property. His only worry: its price falling.'},
+    done: () => !!account },
+  { target: '#depositBtn',
+    title: {'zh-CN':'第 3 步 · 存入稳定币保证金','zh-TW':'第 3 步 · 存入穩定幣保證金',en:'Step 3 · Deposit stablecoin margin'},
+    body: {'zh-CN':'点“一键领取并存入 1,000 mUSDC”。会依次弹出领取、授权、存入三笔钱包确认，都点确认。','zh-TW':'點「一鍵領取並存入 1,000 mUSDC」。會依次彈出領取、授權、存入三筆錢包確認，都點確認。',en:'Click deposit to claim & deposit 1,000 mUSDC. Confirm the three wallet prompts (claim, approve, deposit).'},
+    say: {'zh-CN':'先放日常用的稳定币保证金进来——这部分谁都懂，重点在下一步。','zh-TW':'先放日常用的穩定幣保證金進來——這部分誰都懂，重點在下一步。',en:'First the everyday stablecoin margin goes in — the interesting part is next.'},
+    done: () => { const e=document.getElementById('vaultBalance'); return e && !/^-|^\(/.test(e.textContent) && !/ 0 mUSDC/.test(e.textContent); } },
+  { target: '#rwaDepositBtn',
+    title: {'zh-CN':'第 4 步 · 把房子存进金库（核心）','zh-TW':'第 4 步 · 把房子存進金庫（核心）',en:'Step 4 · Deposit the property (core)'},
+    body: {'zh-CN':'在“RWA 抵押”面板点“授权并存入 RWA”。估值刚开始可能是 0，等约一分钟 TWAP 窗口走完，数字会自己出现——这是故意的。','zh-TW':'在「RWA 抵押」面板點「授權並存入 RWA」。估值剛開始可能是 0，等約一分鐘 TWAP 窗口走完，數字會自己出現——這是故意的。',en:'In the RWA panel, approve & deposit the RWA. Its value may show 0 for about a minute until the TWAP window warms up — that is by design.'},
+    say: {'zh-CN':'他不卖房、不借钱：房子直接躺进金库继续生息。金库不靠人报价，自己去链上池子读 TWAP 均价再打七折——池子很薄，所以风控必须保守。','zh-TW':'他不賣房、不借錢：房子直接躺進金庫繼續生息。金庫不靠人報價，自己去鏈上池子讀 TWAP 均價再打七折——池子很薄，所以風控必須保守。',en:'No selling, no borrowing: the property sits in the vault still earning rent. The vault prices it itself from the on-chain TWAP with a 30% haircut.'},
+    done: () => { const e=document.getElementById('rwaVaultBal'); return e && !/^-/.test(e.textContent) && !/^0(\.0+)? /.test(e.textContent); } },
+  { target: '#hedgeQuoteBtn',
+    title: {'zh-CN':'第 5 步 · 算对冲要开多大','zh-TW':'第 5 步 · 算對沖要開多大',en:'Step 5 · Size the hedge'},
+    body: {'zh-CN':'在“对冲测算”面板点“计算对冲仓位”（默认按资产估值 100% 对冲），看名义价值和保证金是否覆盖，再点“按测算填入空单”。','zh-TW':'在「對沖測算」面板點「計算對沖倉位」（預設按資產估值 100% 對沖），看名義價值和保證金是否覆蓋，再點「按測算填入空單」。',en:'In the hedge panel, compute the hedge (100% of asset value by default), check margin coverage, then fill the short order.'},
+    say: {'zh-CN':'对冲不是随手开一单：开多大，是拿他的资产估值和对冲比例算出来的。','zh-TW':'對沖不是隨手開一單：開多大，是拿他的資產估值和對沖比例算出來的。',en:'A hedge is not a random order — its size is computed from his asset value and hedge ratio.'},
+    done: () => { const e=document.getElementById('hedgeQty'); return e && !/^-/.test(e.textContent) && e.textContent !== '0'; } },
+  { target: '#placeOrderBtn',
+    title: {'zh-CN':'第 6 步 · 下单对冲','zh-TW':'第 6 步 · 下單對沖',en:'Step 6 · Place the hedge order'},
+    body: {'zh-CN':'确认下单区已是卖出方向、数量来自测算，点“下单”。盘口有对手单时会立刻成交，仓位面板随即出现仓位和强平价。','zh-TW':'確認下單區已是賣出方向、數量來自測算，點「下單」。盤口有對手單時會立刻成交，倉位面板隨即出現倉位和強平價。',en:'Confirm Sell side with the computed quantity, then place the order. It fills against the resting book and the position appears with its liquidation price.'},
+    say: {'zh-CN':'现在他的对冲单开好了：房价跌多少，仓位就赚多少，净值被钉住。','zh-TW':'現在他的對沖單開好了：房價跌多少，倉位就賺多少，淨值被釘住。',en:'His hedge is on: if the price falls, the position gains — his net value is pinned.'},
+    done: () => { const e=document.getElementById('positionBody'); return e && !/暂无仓位|No position/.test(e.textContent) && e.textContent.trim().length > 0 && !/连接钱包后显示/.test(e.textContent); } },
+  { target: '#tradesBody',
+    title: {'zh-CN':'第 7 步 · 点开链上凭证','zh-TW':'第 7 步 · 點開鏈上憑證',en:'Step 7 · Open the on-chain proof'},
+    body: {'zh-CN':'在“最近成交”或下方日志里找到刚成交那笔的哈希链接，点开 Snowtrace 给评委看 success 和余额变化。每次哈希都不同，这是真发生的证据。','zh-TW':'在「最近成交」或下方日誌裡找到剛成交那筆的哈希連結，點開 Snowtrace 給評委看 success 和餘額變化。每次哈希都不同，這是真發生的證據。',en:'Find the new trade hash in Recent Trades or the log and open Snowtrace: success status and balance changes. Every hash differs — because every trade really happened.'},
+    say: {'zh-CN':'这笔结算是这一分钟刚上链的。哈希和昨天截图里的不一样，明天还会再变——因为每一笔都是真的。','zh-TW':'這筆結算是這一分鐘剛上鏈的。哈希和昨天截圖裡的不一樣，明天還會再變——因為每一筆都是真的。',en:'This settlement landed on-chain this minute. Its hash differs from any screenshot — and will differ again tomorrow, because each trade is real.'},
+    done: () => false },
+];
+
+let tourIdx = -1, tourTimer = null;
+const $ = (id) => document.getElementById(id);
+
+function tourRender() {
+  const step = TOUR_STEPS[tourIdx];
+  if (!step) return tourExit();
+  $('tourTitle').textContent = step.title[LANG] || step.title['zh-CN'];
+  $('tourBody').textContent = step.body[LANG] || step.body['zh-CN'];
+  $('tourSay').textContent = step.say[LANG] || step.say['zh-CN'];
+  $('tourProg').textContent = `${tourIdx + 1} / ${TOUR_STEPS.length}`;
+  $('tourSayLabel').textContent = LANG === 'en' ? 'Say this' : '照着念';
+  $('tourPrev').textContent = LANG === 'en' ? 'Back' : '上一步';
+  $('tourNext').textContent = LANG === 'en' ? 'Next' : '下一步';
+  $('tourDone').textContent = LANG === 'en' ? 'I did it' : '我已完成';
+  $('tourExit').textContent = LANG === 'en' ? 'Exit guide' : '退出引导';
+  const el = document.querySelector(step.target);
+  const box = $('tourBox');
+  if (el) {
+    try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch {}
+    setTimeout(() => {
+      const r = el.getBoundingClientRect();
+      box.style.left = (r.left - 6) + 'px'; box.style.top = (r.top - 6) + 'px';
+      box.style.width = (r.width + 12) + 'px'; box.style.height = (r.height + 12) + 'px';
+    }, 380);
+  } else { box.style.width = '0px'; box.style.height = '0px'; }
+  tourCheck();
+}
+function tourCheck() {
+  const step = TOUR_STEPS[tourIdx];
+  if (!step) return;
+  let ok = false;
+  try { ok = !!step.done(); } catch {}
+  $('tourState').textContent = ok
+    ? (LANG === 'en' ? '✓ Detected as done — you can move on' : '✓ 已检测到完成，可以下一步')
+    : (LANG === 'en' ? 'Waiting… (or click “I did it” to continue)' : '等待完成…（也可以点“我已完成”继续）');
+  if (ok) $('tourState').style.color = '#3fb950'; else $('tourState').style.color = '#9aa4af';
+}
+function tourGo(n) {
+  // 元素不存在的步骤自动跳过，避免引导卡死
+  while (n >= 0 && n < TOUR_STEPS.length && !document.querySelector(TOUR_STEPS[n].target)) n += (n > tourIdx ? 1 : -1);
+  if (n < 0 || n >= TOUR_STEPS.length) return tourExit();
+  tourIdx = n; tourRender();
+}
+function tourStart() {
+  $('tourMask').style.display = 'block'; $('tourPanel').style.display = 'block';
+  tourIdx = 0; tourRender();
+  clearInterval(tourTimer);
+  tourTimer = setInterval(() => { if (tourIdx >= 0) tourCheck(); }, 1200);
+}
+function tourExit() {
+  tourIdx = -1;
+  $('tourMask').style.display = 'none'; $('tourPanel').style.display = 'none';
+  clearInterval(tourTimer);
+}
+$('tourNext').addEventListener('click', () => tourGo(tourIdx + 1));
+$('tourDone').addEventListener('click', () => tourGo(tourIdx + 1));
+$('tourPrev').addEventListener('click', () => tourGo(tourIdx - 1));
+$('tourExit').addEventListener('click', tourExit);
+$('guideBtn').addEventListener('click', tourStart);
+window.addEventListener('resize', () => { if (tourIdx >= 0) tourRender(); });
+
+// ---------- 三语切换：核心界面词条（引导文案本身已三语） ----------
+const I18N_STATIC = {
+  '连接钱包并登录': {en:'Connect & Login','zh-TW':'連接錢包並登入'},
+  '新手引导': {en:'▶ Guided Demo','zh-TW':'▶ 新手引導'},
+  '领取 1,000 mUSDC 并存入保证金': {en:'Claim & Deposit 1,000 mUSDC','zh-TW':'領取 1,000 mUSDC 並存入保證金'},
+  '授权并存入 RWA 到 MultiCollateralVaultV2': {en:'Approve & Deposit RWA','zh-TW':'授權並存入 RWA 到 MultiCollateralVaultV2'},
+  '计算对冲仓位': {en:'Compute Hedge','zh-TW':'計算對沖倉位'},
+  '按测算结果填入空单（卖出）': {en:'Fill Short Order from Quote','zh-TW':'按測算結果填入空單（賣出）'},
+  '下单': {en:'Place Order','zh-TW':'下單'},
+  '账户': {en:'Account','zh-TW':'帳戶'},
+  '下单': {en:'Place Order','zh-TW':'下單'},
+  '订单簿（实时，WebSocket 推送）': {en:'Order Book (live)','zh-TW':'訂單簿（即時，WebSocket 推送）'},
+  '价格走势（最近成交）': {en:'Price Chart (recent trades)','zh-TW':'價格走勢（最近成交）'},
+  '我的挂单': {en:'My Open Orders','zh-TW':'我的掛單'},
+  '我的仓位': {en:'My Position','zh-TW':'我的倉位'},
+  '最近成交': {en:'Recent Trades','zh-TW':'最近成交'},
+  '链上合约（Avalanche Fuji，可验证）': {en:'On-chain Contracts (Fuji)','zh-TW':'鏈上合約（Avalanche Fuji，可驗證）'},
+  '日志 / 成交回报': {en:'Log / Fills','zh-TW':'日誌 / 成交回報'},
+};
+function applyLang() {
+  document.querySelectorAll('h3,button,label').forEach((el) => {
+    if (el.children.length) return;
+    const t = el.textContent.trim();
+    // 还原：先用 data-zh 存住中文原文
+    if (!el.dataset.zh && /[\u4e00-\u9fff]/.test(t)) el.dataset.zh = t;
+    const src = el.dataset.zh;
+    if (!src) return;
+    const entry = I18N_STATIC[src];
+    if (LANG === 'zh-CN') el.textContent = src;
+    else if (entry && entry[LANG]) el.textContent = entry[LANG];
+  });
+  $('langSel').value = LANG;
+  if (tourIdx >= 0) tourRender();
+}
+$('langSel').addEventListener('change', (e) => {
+  LANG = e.target.value;
+  localStorage.setItem('avavault-lang', LANG);
+  applyLang();
+});
+applyLang();
+
+startHealthMonitor();
 </script>
 </body>
 </html>

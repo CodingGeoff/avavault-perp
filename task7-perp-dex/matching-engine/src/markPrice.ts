@@ -23,6 +23,11 @@ export class TwapMarkPrice {
     this.windowMs = opts.windowMs ?? 5 * 60 * 1000; // 默认 5 分钟窗口
   }
 
+  /** 清空全部样本（演示彩排后重置标记价用） */
+  reset(): void {
+    this.samples = [];
+  }
+
   addSample(price: bigint, timestamp: number): void {
     if (price <= 0n) return;
     const last = this.samples[this.samples.length - 1];

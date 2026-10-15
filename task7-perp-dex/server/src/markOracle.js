@@ -1,6 +1,28 @@
 import { TwapMarkPrice } from "../../matching-engine/dist/markPrice.js";
 
 /**
+ * 解析外部喂价的常见返回形状，统一成系统价格单位（整数，向上层截断小数）：
+ *   - 纯数字 / {"price": 2500} / {"price": "2500.5"}（自建喂价、Binance 风格）
+ *   - {"avalanche-2": {"usd": 35.2}}（CoinGecko /simple/price 风格，取第一个 usd 字段）
+ * 解析不出正数时抛错，调用方按"喂价不可用"退回成交 TWAP，不会把脏数据喂给强平。
+ */
+export function parseFeedPrice(data) {
+  let raw = NaN;
+  if (typeof data === "number") raw = data;
+  else if (data && typeof data === "object") {
+    if (data.price !== undefined) raw = Number(data.price);
+    else {
+      for (const v of Object.values(data)) {
+        if (v && typeof v === "object" && v.usd !== undefined) { raw = Number(v.usd); break; }
+      }
+    }
+  }
+  const price = BigInt(Math.trunc(raw));
+  if (!(price > 0n)) throw new Error("feed returned a non-positive or unparsable price");
+  return price;
+}
+
+/**
  * 标记价来源组合（独立于最新成交价，避免单笔成交猎杀强平线）：
  *   1. 外部喂价（MARK_PRICE_FEED_URL，返回 {"price": 2500} 或纯数字 JSON）——配了且可用时优先；
  *   2. 成交 TWAP（TwapMarkPrice 对窗口内成交做时间加权，单笔瞬时价格拉不动）；
@@ -14,6 +36,12 @@ export class MarkOracle {
     this.feedCacheMs = feedCacheMs;
     this.feedTimeoutMs = feedTimeoutMs;
     this.feedCache = null; // { price: bigint, at: number }
+  }
+
+  /** 清空成交样本与喂价缓存（演示彩排重置用） */
+  reset() {
+    this.twap.reset();
+    this.feedCache = null;
   }
 
   addTradeSample(price, timestamp = Date.now()) {
@@ -30,9 +58,7 @@ export class MarkOracle {
       const res = await fetch(this.feedUrl, { signal: ctrl.signal });
       if (!res.ok) throw new Error(`feed HTTP ${res.status}`);
       const data = await res.json();
-      const raw = typeof data === "number" ? data : data.price;
-      const price = BigInt(Math.trunc(Number(raw)));
-      if (price <= 0n) throw new Error("feed returned a non-positive price");
+      const price = parseFeedPrice(data);
       this.feedCache = { price, at: Date.now() };
       return price;
     } finally {

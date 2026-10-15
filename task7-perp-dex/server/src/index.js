@@ -6,9 +6,10 @@ import { ethers } from "ethers";
 import { randomBytes } from "node:crypto";
 import { OrderBook } from "../../matching-engine/dist/orderbook.js";
 import { PositionManager } from "../../matching-engine/dist/positions.js";
-import { persistOrderResult, persistOrderState, markTradeSettled, loadRecentTrades, loadOpenOrders, persistSession, loadSessions, persistPosition, loadPositions, setClearingValue, getClearingValue } from "./db.js";
+import { persistOrderResult, persistOrderState, markTradeSettled, loadRecentTrades, loadOpenOrders, persistSession, loadSessions, persistPosition, loadPositions, setClearingValue, getClearingValue, clearDemoState } from "./db.js";
 import { MarkOracle } from "./markOracle.js";
 import { MarginService, parsePriceToE6 } from "./margin.js";
+import { computeHedgeQuote } from "../../matching-engine/dist/hedge.js";
 
 const PORT = process.env.PORT || 4000;
 const RPC_URL = process.env.FUJI_RPC_URL || "https://api.avax-test.network/ext/bc/C/rpc";
@@ -511,6 +512,29 @@ app.post("/auth/login", (req, res) => {
   }
 });
 
+/**
+ * 演示彩排重置：清空订单簿/成交/仓位/保险基金（内存 + SQLite），保留登录会话。
+ * 仅当服务端配置了 ADMIN_RESET_TOKEN 时开启，请求头 x-admin-token 必须匹配；
+ * 未配置时一律 403，避免有人在正式演示中途把盘口清掉。
+ * 注意：这清不掉已上链的 Vault 余额与已确认交易（链上不可逆），彩排纪律见根目录 DEMO_RUNBOOK.md。
+ */
+app.post("/admin/reset-demo", (req, res) => {
+  const expected = process.env.ADMIN_RESET_TOKEN || "";
+  if (!expected) return res.status(403).json({ error: "demo reset disabled (ADMIN_RESET_TOKEN not set)" });
+  if (req.get("x-admin-token") !== expected) return res.status(401).json({ error: "invalid admin token" });
+  book.reset();
+  positions.reset();
+  markOracle.reset();
+  orderAuthorizations.clear();
+  orderLeverages.clear();
+  clearDemoState();
+  lastFundingAt = null;
+  lastFundingRateBps = null;
+  broadcastPublic("orderbook", serializeSnapshot(book.getSnapshot(20)));
+  console.log("[admin] demo state reset via /admin/reset-demo");
+  res.json({ ok: true, note: "server-side demo state cleared; on-chain balances are NOT affected" });
+});
+
 app.get("/orderbook", (_req, res) => {
   const snap = book.getSnapshot(20);
   res.json({
@@ -554,6 +578,52 @@ app.get("/account/:address/margin", async (req, res) => {
     enforce: MARGIN_ENFORCE,
     sourceErrors: m.sourceErrors,
   });
+});
+
+/**
+ * 对冲测算：给定资产估值、对冲比例与杠杆，算出应该开多大的对冲仓位、
+ * 需要多少保证金、当前综合保证金（Vault mUSDC + RWA 估值）够不够。
+ * 只测算不下单；参考价默认取当前标记价口径（最优卖价 > 成交 TWAP > 最新价）。
+ * 这是"持有生息 RWA、用永续对冲其价格风险"场景的入口：先算覆盖，再下单。
+ */
+app.get("/hedge/quote", async (req, res) => {
+  try {
+    const { address, assetValue, hedgeRatioBps, leverage, referencePrice } = req.query;
+    const lev = leverage === undefined ? 1 : Number(leverage);
+    const ratio = hedgeRatioBps === undefined ? 10_000 : Number(hedgeRatioBps);
+    let availableMargin = 0n;
+    if (address !== undefined) {
+      if (!ethers.isAddress(address)) return res.status(400).json({ error: "invalid address" });
+      const m = await marginService.getMargin(address);
+      availableMargin = m.effectiveMargin;
+    }
+    let ref = referencePrice !== undefined ? toBigIntSafe(referencePrice) : null;
+    if (ref === null) {
+      const mark = await markOracle.getMark();
+      ref = mark?.price ?? book.getBestAsk() ?? book.getBestBid() ?? null;
+    }
+    if (ref === null) return res.status(503).json({ error: "no reference price available" });
+    const q = computeHedgeQuote({
+      assetValue: toBigIntSafe(assetValue ?? "0"),
+      hedgeRatioBps: ratio,
+      referencePrice: ref,
+      leverage: lev,
+      availableMargin,
+    });
+    res.json({
+      notional: q.notional.toString(),
+      quantity: q.quantity.toString(),
+      requiredMargin: q.requiredMargin.toString(),
+      availableMargin: q.availableMargin.toString(),
+      covered: q.covered,
+      shortfall: q.shortfall.toString(),
+      referencePrice: ref.toString(),
+      hedgeRatioBps: ratio,
+      leverage: lev,
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 /** 单个交易者的仓位（含标记价下的浮盈亏、权益、强平价） */

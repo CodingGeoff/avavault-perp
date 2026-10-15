@@ -251,3 +251,19 @@ describe("OrderBook — 输入校验", () => {
     ).toThrow();
   });
 });
+
+describe("OrderBook — reset（演示彩排重置）", () => {
+  it("reset 后盘口/订单/成交清空且新订单 id 从头开始", () => {
+    const book = new OrderBook();
+    book.placeOrder({ traderId: "a", side: "sell", price: 100n, quantity: 1n });
+    book.placeOrder({ traderId: "b", side: "buy", price: 100n, quantity: 1n });
+    expect(book.trades.length).toBeGreaterThan(0);
+    book.reset();
+    const snap = book.getSnapshot();
+    expect(snap.bids).toHaveLength(0);
+    expect(snap.asks).toHaveLength(0);
+    expect(book.trades).toHaveLength(0);
+    const { order } = book.placeOrder({ traderId: "a", side: "buy", price: 100n, quantity: 1n });
+    expect(order.id).toBe("order-1");
+  });
+});

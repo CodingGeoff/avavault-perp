@@ -31,3 +31,7 @@ services:
         value: "10"
       - key: OPERATOR_PRIVATE_KEY
         sync: false
+      # 演示彩排重置开关：设置后可用 POST /admin/reset-demo（x-admin-token 头）
+      # 清空订单簿/仓位回到干净状态；不设置则该端点禁用。见 DEMO_RUNBOOK.md。
+      - key: ADMIN_RESET_TOKEN
+        sync: false

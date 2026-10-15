@@ -165,10 +165,17 @@ contract PerpMarginAccount {
         emit Deposited(msg.sender, received);
     }
 
-    /// @notice 只能提取未被仓位占用的自由保证金
+    /// @notice 只能提取未被仓位占用的自由保证金，且不能超过实际存入的保证金代币余额。
+    /// @dev freeMargin() 计入了 RWA 抵押估值，但 RWA 估值不是本合约持有的保证金
+    ///      代币、提不出来。若只按 freeMargin 放行，一个只有 RWA 抵押、从未存入
+    ///      保证金代币的用户 withdraw 会在下面 marginBalance 相减时以算术
+    ///      panic(0x11) 回滚而不是业务错误，且语义上等于允许用 RWA 估值直接
+    ///      套现保证金代币（合约根本没有这笔钱）。可提额取两者较小值。
     function withdraw(uint256 amount) external whenNotPaused {
         if (amount == 0) revert ZeroAmount();
-        if (amount > freeMargin(msg.sender)) revert InsufficientFreeMargin();
+        uint256 free = freeMargin(msg.sender);
+        uint256 withdrawable = free < marginBalance[msg.sender] ? free : marginBalance[msg.sender];
+        if (amount > withdrawable) revert InsufficientFreeMargin();
         marginBalance[msg.sender] -= amount;
         if (!marginToken.transfer(msg.sender, amount)) revert TransferFailed();
         emit Withdrawn(msg.sender, amount);

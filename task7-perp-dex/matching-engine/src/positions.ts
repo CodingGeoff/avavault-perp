@@ -92,6 +92,15 @@ export class PositionManager {
     this.liquidationPenaltyBps = BigInt(opts.liquidationPenaltyBps ?? 50); // 默认名义价值的 0.5%
   }
 
+  /** 清空全部仓位/标记价/保险基金状态（演示彩排后重置用；调用方负责同步清库） */
+  reset(): void {
+    this.positions.clear();
+    this.markPrice = null;
+    this.insuranceFund = 0n;
+    this.totalInsuranceCovered = 0n;
+    this.totalBadDebt = 0n;
+  }
+
   /** 向保险基金注资（运营方/协议收入注入，金额为保证金代币最小单位） */
   fundInsurance(amount: bigint): void {
     if (amount <= 0n) throw new Error("insurance funding amount must be > 0");

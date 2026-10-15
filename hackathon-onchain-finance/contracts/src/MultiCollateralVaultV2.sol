@@ -57,6 +57,7 @@ contract MultiCollateralVaultV2 is Ownable, ReentrancyGuard, Pausable, EIP712 {
     event OperatorUpdated(address indexed newOperator);
 
     error CollateralNotActive();
+    error QuoteTokenMismatch();
     error ZeroAmount();
     error InsufficientBalance();
     error NotOperator();
@@ -83,6 +84,14 @@ contract MultiCollateralVaultV2 is Ownable, ReentrancyGuard, Pausable, EIP712 {
     // ---------------------------------------------------------------
     function listCollateral(address token, address router, address quoteToken, uint16 haircutBps) external onlyOwner {
         require(haircutBps > 0 && haircutBps <= 10_000, "invalid haircut");
+        // totalAccountValue() 把所有抵押品的估值直接相加，因此所有已登记抵押品
+        // 必须共用同一个 quoteToken，否则会把不同计价单位（WAVAX 与稳定币）
+        // 混加成一个无意义的总数。统一 USD 计价需要价格换算层（见
+        // PerpMarginAccount.quotePriceE6 的做法），在那之前先在合约层拒绝混加。
+        if (supportedCollaterals.length > 0) {
+            address firstQuote = collateralConfigs[supportedCollaterals[0]].quoteToken;
+            if (firstQuote != address(0) && quoteToken != firstQuote) revert QuoteTokenMismatch();
+        }
 
         address factory = IUniswapV2Router02(router).factory();
         address pair = IUniswapV2Factory(factory).getPair(token, quoteToken);
@@ -206,7 +215,31 @@ contract MultiCollateralVaultV2 is Ownable, ReentrancyGuard, Pausable, EIP712 {
         if (address(oracle) == address(0) || !oracle.isReady()) return 0;
 
         uint256 rawQuoteValue = oracle.consult(token, amount);
-        return (rawQuoteValue * cfg.haircutBps) / 10_000;
+        return (rawQuoteValue * effectiveHaircutBps(token)) / 10_000;
+    }
+
+    /// @notice 动态折价率：在静态 haircutBps 之上，按相邻两个 TWAP 窗口之间的
+    ///         偏离度再打一层折扣。偏离 <=10% 不额外打折；偏离越大折扣越狠，
+    ///         额外折扣封顶 50%。两个窗口都是 TWAP，单笔/同区块操纵拉不动
+    ///         这个指标——它只对持续多窗口的真实剧烈波动作出反应。
+    ///         历史窗口不足（刚上线）时退回静态折价，不臆造波动。
+    function effectiveHaircutBps(address token) public view returns (uint256) {
+        CollateralConfig memory cfg = collateralConfigs[token];
+        if (!cfg.active || cfg.haircutBps == 0) return 0;
+        TwapOracle oracle = oracles[token];
+        if (address(oracle) == address(0)) return cfg.haircutBps;
+
+        (uint256 curr, uint256 prev) = token == oracle.token0()
+            ? (oracle.price0Average(), oracle.price0AveragePrev())
+            : (oracle.price1Average(), oracle.price1AveragePrev());
+        if (curr == 0 || prev == 0) return cfg.haircutBps;
+
+        uint256 diff = curr > prev ? curr - prev : prev - curr;
+        uint256 deviationBps = (diff * 10_000) / prev;
+        if (deviationBps <= 1_000) return cfg.haircutBps;
+        uint256 extraDiscountBps = deviationBps - 1_000;
+        if (extraDiscountBps > 5_000) extraDiscountBps = 5_000;
+        return (uint256(cfg.haircutBps) * (10_000 - extraDiscountBps)) / 10_000;
     }
 
     function totalAccountValue(address user) external view returns (uint256 total) {
