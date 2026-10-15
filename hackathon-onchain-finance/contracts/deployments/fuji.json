@@ -1,0 +1,39 @@
+{
+  "chainId": 43113,
+  "network": "avalanche-fuji",
+  "rpcUrl": "https://api.avax-test.network/ext/bc/C/rpc",
+  "explorer": "https://testnet.snowtrace.io",
+  "deployedAt": "2026-10-15T09:43:30Z",
+  "deployer": "0xF7ac5cF5D95256E960DF21229B140edFE31b5c9b",
+  "contracts": {
+    "SimpleMarkOracle": {
+      "address": "0x713Ef730F1f04350752e3684Af0ebDF4288eC482",
+      "deployTx": "0x629c665ab5ace53a040e9de1f07bd59df516bcb2412e714f5c32639b3b34e1d8"
+    },
+    "PerpMarginAccount": {
+      "address": "0xB329713EbF8c72a3ffD5605fa720482c58601610",
+      "deployTx": "0x88320d2b86a72abc1695892c2914692f61b7ae0ee3c307c5870cfdf212cc35b0"
+    },
+    "MultiCollateralVaultV2": {
+      "address": "0xb999cb61A4fb2FE71d1C5FBA7aD506F619dD7884"
+    },
+    "MockUSDC": {
+      "address": "0x206d1B4D35c1f081C82939F1d97A05B5cb5BEF93"
+    }
+  },
+  "params": {
+    "quoteSymbol": "WAVAX",
+    "quotePriceE6": 9620000,
+    "quotePriceUsdAtDeploy": 9.62,
+    "quotePriceSources": {
+      "coingecko": 9.61,
+      "coinbase": 9.622,
+      "kraken": 9.622,
+      "dexscreenerWavaxUsdc": 9.61
+    },
+    "initialMarkPrice": 2500,
+    "maintenanceMarginBps": 500,
+    "liquidationPenaltyBps": 50,
+    "maxLeverage": 20
+  }
+}

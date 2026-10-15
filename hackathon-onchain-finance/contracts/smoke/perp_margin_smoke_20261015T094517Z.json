@@ -1,0 +1,76 @@
+{
+  "network": "avalanche-fuji",
+  "chainId": 43113,
+  "rpcUrl": "https://api.avax-test.network/ext/bc/C/rpc",
+  "ranAt": "20261015T094517Z",
+  "trader": "0xF7ac5cF5D95256E960DF21229B140edFE31b5c9b",
+  "contracts": {
+    "PerpMarginAccount": "0xB329713EbF8c72a3ffD5605fa720482c58601610",
+    "SimpleMarkOracle": "0x713Ef730F1f04350752e3684Af0ebDF4288eC482",
+    "MarginToken_mUSDC": "0x206d1B4D35c1f081C82939F1d97A05B5cb5BEF93",
+    "MultiCollateralVaultV2": "0xb999cb61A4fb2FE71d1C5FBA7aD506F619dD7884"
+  },
+  "coreActions": {
+    "1_deposit": {
+      "tx": "0x2ed4fb88fbcd749e80f1d16ae34843bc1552c6495129bcde03f9a4c49ea1ba00",
+      "block": "59495200",
+      "call": "PerpMarginAccount.deposit(uint256)",
+      "amount": 1000000
+    },
+    "2_open_position": {
+      "tx": "0x6abe967036b465beb585ad5438dce1c0c1b971da21c843cec9ae3cdd847f852c",
+      "block": "59495202",
+      "call": "PerpMarginAccount.applyPositionDelta(address,int256,uint256,uint256)",
+      "size": 40,
+      "price": 2500,
+      "leverage": 20
+    },
+    "3_set_mark_price": {
+      "tx": "0x48e2cbfb1c26e6d568ff13583135eda3ed3f8976781e7be45c9f803c3827aa32",
+      "block": "59495206",
+      "call": "SimpleMarkOracle.setPrice(uint256)",
+      "from": 2500,
+      "to": 2350
+    },
+    "4_liquidate": {
+      "tx": "0xcd7041a63b926c30fe5b7c47bb6dd9f03b85a08bdfeb2e9f5b3894323919991e",
+      "block": "59495209",
+      "call": "PerpMarginAccount.liquidate(address)",
+      "liquidatedUser": "0xF7ac5cF5D95256E960DF21229B140edFE31b5c9b",
+      "liquidatedEvent": {
+        "markPrice": 2350,
+        "pnl": -6000,
+        "returnedMargin": 0,
+        "deficit": 1000,
+        "insuranceCovered": 1000,
+        "badDebt": 0
+      },
+      "liquidatedEventRaw": "2350 -6000 0 1000 1000 0 "
+    }
+  },
+  "auxActions": {
+    "approve": {
+      "tx": "0x1f5f66e326ec3af03f3023256bcd057f70f07bf8d35e11b22fed2574407fb29b",
+      "amount": 1100000
+    },
+    "fundInsurance": {
+      "tx": "0xff488f0d676eee0b5a3a57c9ef3b46f0f8b030a0a1e6bc103cb9a6487ee1c2c9",
+      "amount": 100000
+    }
+  },
+  "afterEffects": {
+    "realizedPnl": "-12000 [-1.2e4]",
+    "marginBalance": "1990000 [1.99e6]",
+    "insuranceBalance": "198000 [1.98e5]",
+    "totalInsuranceCovered": "2000",
+    "totalBadDebt": "0"
+  },
+  "logFile": "smoke/perp_margin_smoke_20261015T094517Z.log",
+  "explorer": {
+    "perp": "https://testnet.snowtrace.io/address/0xB329713EbF8c72a3ffD5605fa720482c58601610",
+    "deposit": "https://testnet.snowtrace.io/tx/0x2ed4fb88fbcd749e80f1d16ae34843bc1552c6495129bcde03f9a4c49ea1ba00",
+    "openPosition": "https://testnet.snowtrace.io/tx/0x6abe967036b465beb585ad5438dce1c0c1b971da21c843cec9ae3cdd847f852c",
+    "setMarkPrice": "https://testnet.snowtrace.io/tx/0x48e2cbfb1c26e6d568ff13583135eda3ed3f8976781e7be45c9f803c3827aa32",
+    "liquidate": "https://testnet.snowtrace.io/tx/0xcd7041a63b926c30fe5b7c47bb6dd9f03b85a08bdfeb2e9f5b3894323919991e"
+  }
+}

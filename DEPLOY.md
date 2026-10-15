@@ -25,9 +25,11 @@ deployed `VaultV2` contract on Fuji, so it should "just work."
    OPERATOR_PRIVATE_KEY = 0x8d86e8677fa7cc8c4173641b8fa60ffb505476ca3e3797e31cd3ea2f028f75f2
    ```
 
-   This is the already-deployed demo operator key for `VaultV2`
-   (`0x0425352bc3c5293D5629c27525969439Ab9C27b5`) on Avalanche Fuji **testnet** — it
-   holds no real funds, and every settlement it can trigger is additionally gated by
+   This is the already-deployed demo operator key on Avalanche Fuji **testnet** — the
+   key's own address is `0xF7ac5cF5D95256E960DF21229B140edFE31b5c9b` (that's the
+   `operator`/`owner` of the deployed contracts; `0x0425352bc3c5293D5629c27525969439Ab9C27b5`
+   is the `VaultV2` **contract** address, not the key). It holds no real funds, and
+   every settlement it can trigger is additionally gated by
    each user's own EIP-712 signature (that's the whole point of `VaultV2` — see the
    main README), so a public demo exposure of this key is low-risk. If you'd rather
    use a fresh key of your own, you'd need to call the vault's owner-only operator

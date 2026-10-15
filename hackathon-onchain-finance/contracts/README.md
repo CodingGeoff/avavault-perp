@@ -11,7 +11,7 @@
 | `src/MultiCollateralVault.sol` | 多抵押金库 V1（瞬时价估值 + operator 结算，保留作对照） |
 | `src/MultiCollateralVaultV2.sol` | 多抵押金库 V2（TWAP 估值 + EIP-712 签名授权结算），已部署 Fuji |
 | `src/TwapOracle.sol` | 基于 UniswapV2 累积价格的 TWAP 预言机 |
-| `src/PerpMarginAccount.sol` | 把抵押估值在合约层绑成永续仓位保证金：仓位/杠杆/独立标记价强平/保险基金兜底穿仓（待部署，测试见下） |
+| `src/PerpMarginAccount.sol` | 把抵押估值在合约层绑成永续仓位保证金：仓位/杠杆/独立标记价强平/保险基金兜底穿仓（**已部署 Fuji**，地址与冒烟证据见 `SMOKE_EVIDENCE.md`） |
 
 ## 环境准备（第一次）
 
@@ -46,13 +46,39 @@ forge test --match-contract MultiCollateralVaultV2 -vvv
 部分平仓盈亏、反手、独立标记价触发强平（罚金入保险基金）、穿仓缺口由保险
 基金兜底后记坏账、健康仓位不可强平。
 
-## 部署 PerpMarginAccount（可选，测试通过后再做）
+## 部署 PerpMarginAccount（已部署 Fuji ✅）
 
-部署需要：保证金代币地址、已部署的 `MultiCollateralVaultV2` 地址、一个标记价
-预言机地址（`IMarkPriceOracle.getMarkPrice()`）、quote 美元价（放大 1e6）。
-先用 `forge script` 写部署脚本或直接用 `forge create`，部署后把新地址登记进
-服务端的文档与前端合约面板，并用一笔小额仓位在 Fuji 上做端到端验证后，再在
-项目 README 的部署记录里补上地址与交易哈希——未部署前不要对外宣称已上线。
+合约层仓位保证金系统已经真实部署到 Fuji 测试网，并做完了
+**存款 → 开仓 → 改标记价 → 强平** 的链上冒烟：
+
+| 合约 | 地址 |
+|---|---|
+| `PerpMarginAccount` | [`0xB329713EbF8c72a3ffD5605fa720482c58601610`](https://testnet.snowtrace.io/address/0xB329713EbF8c72a3ffD5605fa720482c58601610) |
+| `SimpleMarkOracle`（独立标记价） | [`0x713Ef730F1f04350752e3684Af0ebDF4288eC482`](https://testnet.snowtrace.io/address/0x713Ef730F1f04350752e3684Af0ebDF4288eC482) |
+
+四个动作的交易哈希、链上读数前后对照、以及"三条命令自己复核"的复现步骤，全部在
+[`SMOKE_EVIDENCE.md`](./SMOKE_EVIDENCE.md)；机器可读证据在 `smoke/`，地址清单在
+`deployments/fuji.json`（前端合约面板与本文档引用同一份）。
+
+需要重跑冒烟或换机部署时：
+
+```bash
+cp .env.example .env      # 填 PRIVATE_KEY（部署钱包，需要少量 Fuji 测试 AVAX 与 mUSDC）
+source .env
+
+# 重跑冒烟（存款 → 开仓 → 改标记价 → 强平，四个动作各一笔真实交易）
+bash script/smoke_perp_margin.sh
+
+# 需要重新部署时（脚本里有默认参数，部署前按当时市价核对 QUOTE_PRICE_E6）
+forge script script/DeployPerpMarginAccount.s.sol:DeployPerpMarginAccount \
+  --rpc-url $FUJI_RPC_URL --broadcast --private-key $PRIVATE_KEY
+```
+
+部署/冒烟用到的参数：`MARGIN_TOKEN`（mUSDC）、`COLLATERAL_VAULT`（已部署的
+`MultiCollateralVaultV2`）、`QUOTE_PRICE_E6`（quote 代币美元价 ×1e6，部署当天 WAVAX ≈
+$9.62 → `9620000`）、`INITIAL_MARK_PRICE`（2500，与演示盘口同锚）。部署后记得把
+`deployments/fuji.json`、`SMOKE_EVIDENCE.md`、前端合约面板与项目 README 的部署记录同步更新——
+未复核前不要对外宣称已上线。
 
 ---
 

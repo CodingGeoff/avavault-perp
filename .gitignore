@@ -9,5 +9,11 @@ broadcast/
 *.sqlite-shm
 .env
 .env.local
+# Foundry 依赖（forge install 本地安装，不入库）。
+# 注意：带斜杠的 gitignore 模式锚定在 .gitignore 所在目录，所以这里要写全路径。
 lib/forge-std/
 lib/openzeppelin-contracts/
+hackathon-onchain-finance/contracts/lib/forge-std/
+hackathon-onchain-finance/contracts/lib/openzeppelin-contracts/
+task7-perp-dex/contracts/lib/forge-std/
+task7-perp-dex/contracts/lib/openzeppelin-contracts/

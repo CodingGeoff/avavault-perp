@@ -244,6 +244,17 @@
     <div class="row"><span>VaultV2（永续结算，EIP-712 授权）</span><a href="https://testnet.snowtrace.io/address/0x0425352bc3c5293D5629c27525969439Ab9C27b5" target="_blank" style="color:#E84142;">0x0425…27b5</a></div>
     <div class="row"><span>RWAToken（SRT-RWA）</span><a href="https://testnet.snowtrace.io/address/0x1cC1650E2Da5c2357c811B90187D1022b70B70Ad" target="_blank" style="color:#E84142;">0x1cC1…70Ad</a></div>
     <div class="row"><span>WAVAX/RWA 定价池（LFJ）</span><a href="https://testnet.snowtrace.io/address/0x7590d84174571d89732451bb77BB4C38F7183b85" target="_blank" style="color:#E84142;">0x7590…3b85</a></div>
+    <div class="row"><span>PerpMarginAccount（合约层仓位保证金）</span><a href="https://testnet.snowtrace.io/address/0xB329713EbF8c72a3ffD5605fa720482c58601610" target="_blank" style="color:#E84142;">0xB329…1610</a></div>
+    <div class="row"><span>SimpleMarkOracle（独立标记价）</span><a href="https://testnet.snowtrace.io/address/0x713Ef730F1f04350752e3684Af0ebDF4288eC482" target="_blank" style="color:#E84142;">0x713E…C482</a></div>
+  </div>
+
+  <div class="card full">
+    <h3>链上仓位保证金（PerpMarginAccount，Fuji 真实交易）</h3>
+    <div class="row"><span>标记价（独立预言机，与成交价解耦）</span><span id="perpMarkPrice" style="color:#d7dde3;">-</span></div>
+    <div class="row"><span>保险基金余额</span><span id="perpInsurance" style="color:#d7dde3;">-</span></div>
+    <div class="row"><span>累计兜底 / 坏账</span><span id="perpCoveredBadDebt" style="color:#d7dde3;">-</span></div>
+    <div class="row"><span>读取地址</span><span><a href="https://testnet.snowtrace.io/address/0xB329713EbF8c72a3ffD5605fa720482c58601610" target="_blank" style="color:#E84142;">PerpMarginAccount 0xB329…1610</a> · <a href="https://testnet.snowtrace.io/address/0x713Ef730F1f04350752e3684Af0ebDF4288eC482" target="_blank" style="color:#E84142;">SimpleMarkOracle 0x713E…C482</a></span></div>
+    <div class="hint">这一层把 RWA 抵押估值（MultiCollateralVaultV2.totalAccountValue）按部署时的 quote 美元价折算成 mUSDC 计入可用保证金，强平只读上面的独立标记价。存款 → 开仓 → 改标记价 → 强平 四个动作都已在 Fuji 留下真实交易，逐笔可在 Snowtrace 复核（证据见仓库 <code>hackathon-onchain-finance/contracts/SMOKE_EVIDENCE.md</code>）。</div>
   </div>
 
 
@@ -347,6 +358,12 @@ const MOCK_USDC = '0x206d1B4D35c1f081C82939F1d97A05B5cb5BEF93';
 const VAULT_V2 = '0x0425352bc3c5293D5629c27525969439Ab9C27b5';
 const RWA_TOKEN = '0x1cC1650E2Da5c2357c811B90187D1022b70B70Ad';
 const MC_VAULT_V2 = '0xb999cb61A4fb2FE71d1C5FBA7aD506F619dD7884';
+// 合约层仓位保证金（存款 → 开仓 → 改标记价 → 强平 四个动作已在 Fuji 留下真实交易，
+// 逐笔可查：hackathon-onchain-finance/contracts/SMOKE_EVIDENCE.md）。
+// 前端只做只读展示，不需要预先连接钱包。
+const PERP_MARGIN_ACCOUNT = '0xB329713EbF8c72a3ffD5605fa720482c58601610';
+const MARK_ORACLE = '0x713Ef730F1f04350752e3684Af0ebDF4288eC482';
+const FUJI_PUBLIC_RPC = 'https://api.avax-test.network/ext/bc/C/rpc';
 const ERC20_ABI = [
   'function faucet(uint256 amount) external',
   'function approve(address spender, uint256 amount) external returns (bool)',
@@ -1475,6 +1492,46 @@ async function selfCheck({ quiet = false } = {}) {
   }
 }
 
+// ---------- 合约层仓位保证金（PerpMarginAccount）只读读数 ----------
+// 标记价 / 保险基金 / 累计兜底与坏账，全部走公共 Fuji RPC 的 eth_call，
+// 不依赖钱包连接；RPC 不可达时静默保持 "-"，不影响演示主线。
+const PERP_VIEWS = {
+  markPrice: { to: MARK_ORACLE, data: '0x60409632' },          // getMarkPrice()
+  insurance: { to: PERP_MARGIN_ACCOUNT, data: '0x0577d6d5' }, // insuranceBalance()
+  covered:   { to: PERP_MARGIN_ACCOUNT, data: '0xf501d353' }, // totalInsuranceCovered()
+  badDebt:   { to: PERP_MARGIN_ACCOUNT, data: '0x4986bd50' }, // totalBadDebt()
+};
+async function ethCallUint({ to, data }) {
+  const res = await fetch(FUJI_PUBLIC_RPC, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call', params: [{ to, data }, 'latest'] }),
+  });
+  const body = await res.json();
+  if (!body || typeof body.result !== 'string' || body.result === '0x') throw new Error('eth_call 未返回数据');
+  return BigInt(body.result);
+}
+const fmtMusdc = (v) => (Number(v) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 6 });
+
+async function refreshOnchainPerp() {
+  try {
+    const [markPrice, insurance, covered, badDebt] = await Promise.all([
+      ethCallUint(PERP_VIEWS.markPrice),
+      ethCallUint(PERP_VIEWS.insurance),
+      ethCallUint(PERP_VIEWS.covered),
+      ethCallUint(PERP_VIEWS.badDebt),
+    ]);
+    setState('perpMarkPrice', markPrice.toString(), 'SimpleMarkOracle.getMarkPrice()');
+    setState('perpInsurance', `${fmtMusdc(insurance)} mUSDC`, 'PerpMarginAccount.insuranceBalance()');
+    setState('perpCoveredBadDebt', `${fmtMusdc(covered)} / ${fmtMusdc(badDebt)} mUSDC`,
+      '强平穿仓缺口先由保险基金兜底，不足部分记坏账；余额永不为负，不向用户追偿');
+    return { markPrice, insurance, covered, badDebt };
+  } catch (e) {
+    console.warn('[onchain perp]', e.message);
+    return null;
+  }
+}
+
 async function refreshAll({ quiet = false } = {}) {
   if (!quiet) log('正在刷新链上与服务端数据…');
   try {
@@ -1491,6 +1548,7 @@ async function refreshAll({ quiet = false } = {}) {
     ]);
   }
   await selfCheck({ quiet: true });
+  await refreshOnchainPerp().catch(() => {});
   if (!quiet) log('刷新完成');
 }
 
@@ -1810,6 +1868,7 @@ const I18N_STATIC = {
   '我的仓位': {en:'My Position','zh-TW':'我的倉位'},
   '最近成交': {en:'Recent Trades','zh-TW':'最近成交'},
   '链上合约（Avalanche Fuji，可验证）': {en:'On-chain Contracts (Fuji)','zh-TW':'鏈上合約（Avalanche Fuji，可驗證）'},
+  '链上仓位保证金（PerpMarginAccount，Fuji 真实交易）': {en:'On-chain Position Margin (PerpMarginAccount, live on Fuji)','zh-TW':'鏈上倉位保證金（PerpMarginAccount，Fuji 真實交易）'},
   '日志 / 成交回报': {en:'Log / Fills','zh-TW':'日誌 / 成交回報'},
   '演示控制台（自检 · 重跑）': {en:'Demo Console (self-check · replay)','zh-TW':'演示控制台（自檢 · 重跑）'},
   '一键自检': {en:'Self-check','zh-TW':'一鍵自檢'},
@@ -1862,11 +1921,14 @@ window.__avavault = {
   }),
   selfCheck, refreshAll, seedBook, resetDemo, replayAll,
   runHedgeQuote, renderHedgeQuote, refreshBalance, refreshRwa, refreshPosition,
+  refreshOnchainPerp,
   tourStart, tourExit, tourGo, applyPresenterMode,
   roundDecimalsStr, fmtAmount, fmtEngineMoney,
 };
 
 startHealthMonitor();
+// 页面一打开就读一次合约层仓位保证金（标记价 / 保险基金），不必等钱包连接。
+refreshOnchainPerp().catch(() => {});
 </script>
 </body>
 </html>
